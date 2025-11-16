@@ -2,10 +2,126 @@ IP address for Raspberry PI 4 :192.168.1.35.
 SSH:  ssh benschwem@192.168.1.35
 VNC: Enable VNC on the Pi by running sudo raspi-config, opening Interface Options, turning VNC to Enabled, then use RealVNC Viewer on your Windows PC to connect to your Pi’s IP address.
 RTL-SDR dongle setup:
+	# Update your Raspberry Pi package lists so you have the newest versions
 	sudo apt update
+
+	# Install the tools needed to build the V4 driver from source 
+	# git lets you download source code
+	# cmake and build-essential allow you to compile programs
+	# libusb and pkg-config let the driver talk to the USB dongle
 	sudo apt install -y git cmake build-essential libusb-1.0-0-dev pkg-config
+
+	# Remove the old rtl-sdr package that comes with Raspberry Pi OS
+	# The built-in package is outdated and does NOT fully support the V4 dongle
 	sudo apt purge -y rtl-sdr
+
+	# Disable the Linux kernel's built-in TV tuner driver
+	# Without this step, the kernel grabs the dongle and blocks rtl_test/rtl_fm
 	echo "blacklist dvb_usb_rtl28xxu" | sudo tee /etc/modprobe.d/blacklist-rtl.conf
+
+	# Reboot the Pi so the blacklist takes effect and the dongle comes up clean
 	sudo reboot
+
+	# Check that the Pi sees the RTL-SDR Blog V4 device on USB after reboot
 	lsusb | grep -i Realtek
-Commwnd to tune into WNCI:  rtl_fm -f 97.9M -M wbfm -s 200000 -r 48000 -g 30 | aplay -r 48000 -f S16_LE -c 1
+
+Command to tune into WNCI:  rtl_fm -f 97.9M -M wbfm -s 200000 -r 48000 -g 30 | aplay -r 48000 -f S16_LE -c 1
+Update the driver for hydrogen line:
+	# Go to your home directory
+	cd ~
+
+	# Remove any old copy of the V4 source so you start clean
+	rm -rf rtl-sdr-blog
+
+	# Download the official RTL-SDR Blog V4 driver source code
+	git clone https://github.com/rtlsdrblog/rtl-sdr-blog
+
+	# Enter the source directory
+	cd rtl-sdr-blog
+
+	# Create a build directory
+	mkdir build
+	cd build
+
+	# Configure the build
+	# DETACH_KERNEL_DRIVER=ON lets the RTL app take control even if the kernel tries
+	cmake .. -DDETACH_KERNEL_DRIVER=ON
+
+	# Compile the driver
+	make
+
+	# Install the driver into the system
+	sudo make install
+
+	# Update the library cache so the system sees the new driver
+	sudo ldconfig
+
+	# Test the dongle to confirm V4 driver is active
+	# Expected output includes:
+	# "RTL-SDR Blog V4 Detected"
+	# "Found Rafael Micro R828D tuner"
+	
+	rtl_test -t
+	
+	Should see something like:
+		benschwem@raspberrypi:~/rtl-sdr-blog/build $ rtl_test -t
+		Found 1 device(s):
+		  0:  RTLSDRBlog, Blog V4, SN: 00000001
+
+		Using device 0: Generic RTL2832U OEM
+		Found Rafael Micro R828D tuner
+		RTL-SDR Blog V4 Detected
+		Supported gain values (29): 0.0 0.9 1.4 2.7 3.7 7.7 8.7 12.5 14.4 15.7 16.6 19.7 20.7 22.9 25.4 28.0 29.7 32.8 33.8 36.4 37.2 38.6 40.2 42.1 43.4 43.9 44.5 48.0 49.6
+		Sampling at 2048000 S/s.
+		No E4000 tuner found, aborting.
+
+Test the Hydrogen Line.
+	# Turn on the bias-tee to power the SAWbird H1 LNA
+	rtl_biast -b 1
+	# Expected output:
+	#   Found 1 device(s):
+	#     0:  RTLSDRBlog, Blog V4, SN: 00000001
+	#   Using device 0: Generic RTL2832U OEM
+	#   Found Rafael Micro R828D tuner
+	#   RTL-SDR Blog V4 Detected
+	#   (This confirms that the dongle is fully detected and the bias-tee turned on.)
+
+	# Run a hydrogen-line sweep around 1420 MHz
+	# This records the RF power into test.csv for analysis.
+	rtl_power -f 1415M:1425M:1k -g 40 test.csv
+	# Expected behavior:
+	#   Number of frequency hops: 4
+	#   Dongle bandwidth: 2500000Hz
+	#   Logged FFT bins: 16384
+	#   Reporting every 10 seconds
+	#   Tuner gain set to 40.20 dB.
+	#   Exact sample rate is ~2500000 Hz
+	#   (Press Ctrl+C to stop after at least 20-30 seconds.)
+	# After stopping:
+	#   A file named test.csv appears in your home directory.
+	#   This file contains the hydrogen-line power spectrum.
+
+	# Confirm the file was created
+	ls -lh test.csv
+	# Expected:
+	#   Something like: -rw-r--r-- 1 benschwem benschwem 700K <timestamp> test.csv
+
+	# Run a wideband functional scan from 1 GHz to 1.8 GHz
+	# This confirms the tuner can sweep across its operating range.
+	rtl_power -f 1000M:1800M:2M -g 40 wide_scan.csv
+	# Expected behavior:
+	#   Number of frequency hops: about 400
+	#   Dongle bandwidth: 2000000Hz
+	#   Logged FFT bins: 400
+	#   Reporting every 10 seconds
+	#   Tuner gain set to 40.20 dB.
+	#   Exact sample rate is ~2000000 Hz
+	#   You might see warnings like "PLL not locked" above ~1.75 GHz.
+	#   (This is normal near the tuner’s upper limits and not a failure.)
+	# Press Ctrl+C to end the scan.
+
+	# Verify the wide scan file exists
+	ls -lh wide_scan.csv
+	# Expected:
+	#   A file around 600K-2MB depending on duration.
+
