@@ -1,3 +1,11 @@
 IP address for Raspberry PI 4 :192.168.1.35.
 SSH:  ssh benschwem@192.168.1.35
 VNC: Enable VNC on the Pi by running sudo raspi-config, opening Interface Options, turning VNC to Enabled, then use RealVNC Viewer on your Windows PC to connect to your Pi’s IP address.
+RTL-SDR dongle setup:
+	sudo apt update
+	sudo apt install -y git cmake build-essential libusb-1.0-0-dev pkg-config
+	sudo apt purge -y rtl-sdr
+	echo "blacklist dvb_usb_rtl28xxu" | sudo tee /etc/modprobe.d/blacklist-rtl.conf
+	sudo reboot
+	lsusb | grep -i Realtek
+Commwnd to tune into WNCI:  rtl_fm -f 97.9M -M wbfm -s 200000 -r 48000 -g 30 | aplay -r 48000 -f S16_LE -c 1
