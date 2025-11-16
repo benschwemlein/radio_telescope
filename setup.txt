@@ -97,7 +97,7 @@ Hardware setup:
 	# Dish → SAWbird+ H1 → RTL-SDR Blog V4 → Raspberry Pi
 	# -----------------------------------------------------------
 
-Test the Hydrogen Line:
+Test the equipment indoors
 	# Turn on the bias-tee to power the SAWbird H1 LNA
 	rtl_biast -b 1
 	# Expected output:
@@ -146,4 +146,44 @@ Test the Hydrogen Line:
 	ls -lh wide_scan.csv
 	# Expected:
 	#   A file around 600K-2MB depending on duration.
+	
+Plot the results
+		# 1. On the Raspberry Pi, install matplotlib so Python can open plots
+		sudo apt update
+		sudo apt install -y python3-matplotlib
+
+		# 2. On Windows, upload your script to the Pi (replace password with yours)
+		# Run this in Windows PowerShell from the directory containing your script
+		scp plot_hydrogen.py benschwem@192.168.1.35:/home/benschwem/scripts/
+
+		# 3. On the Pi, make the script executable
+		chmod +x ~/scripts/plot_hydrogen.py
+
+		# 4. Open VNC Viewer on Windows and connect to the Pi desktop
+		# You must run the plot inside VNC so the window can display
+
+		# 5. In a terminal window inside VNC, run the script
+		python3 ~/scripts/plot_hydrogen.py test.vnc
+	
+
+Sun Test	
+	###############################################
+	# SUN TEST 
+	###############################################
+	
+	#Do two runs. One with dish pointed at sun.  Two for a basleine pointed away from sun.
+
+	# 1. Turn on bias tee for SAWbird H1
+	rtl_biast -b 1
+
+	# 2. Run a hydrogen narrow scan on 1420 MHz ± 5 MHz for several minutes
+	rtl_power -f 1415M:1425M:1k -g 40 sun_scan.csv
+
+	# 3. After you stop the scan (Ctrl+C)
+	#    and run it again inside your VNC session
+	python3 plot_hydrogen.py
+		
+		
+
+	
 
