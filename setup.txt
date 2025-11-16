@@ -75,7 +75,29 @@ Update the driver for hydrogen line:
 		Sampling at 2048000 S/s.
 		No E4000 tuner found, aborting.
 
-Test the Hydrogen Line.
+Hardware setup:
+	# -----------------------------------------------------------
+	# HARDWARE CONNECTION SETUP
+	# -----------------------------------------------------------
+
+	# 1. Connect your NooElec hydrogen-line mesh dish feed to the SAWbird+ H1 RF IN port.
+	#    The H1 "input" faces the sky. The "output" goes toward the dongle.
+
+	# 2. Connect the SAWbird+ H1 OUT port to the RTL-SDR Blog V4 dongle using a short SMA cable.
+	#    SAWbird OUT → Dongle ANT IN
+
+	# 3. The dongle goes into your Raspberry Pi USB port.
+
+	# 4. To power the SAWbird+ H1:
+	#    The RTL-SDR Blog V4 provides bias tee power internally.
+	#    So you DO NOT plug anything into the SAWbird USB port.
+	#    You simply run: rtl_biast -b 1
+
+	# At this point your hardware chain is:
+	# Dish → SAWbird+ H1 → RTL-SDR Blog V4 → Raspberry Pi
+	# -----------------------------------------------------------
+
+Test the Hydrogen Line:
 	# Turn on the bias-tee to power the SAWbird H1 LNA
 	rtl_biast -b 1
 	# Expected output:
