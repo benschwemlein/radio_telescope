@@ -1,57 +1,59 @@
 #!/usr/bin/env python3
-
-# This script reads an rtl_power CSV file and plots the averaged spectrum.
-# It handles the rtl_power format: timestamp, start_freq, end_freq, step, FFT bins...
-
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
 import sys
 
-# Change this to your filename, or pass as argument
-filename = "test.csv"
-if len(sys.argv) > 1:
-    filename = sys.argv[1]
+filename = sys.argv[1] if len(sys.argv) > 1 else "test.csv"
 
-freqs = []
-powers = []
+acc = {}
 
-with open(filename, "r") as f:
+DROP_BINS = 5   # drop first 5 bins of each hop (increase to 10 if needed)
+
+with open(filename, "r", newline="") as f:
     reader = csv.reader(f)
     for row in reader:
-        # Skip empty or malformed rows
-        if len(row) < 5:
+        if len(row) < 10:
             continue
 
         try:
-            start_freq = float(row[2])     # col 2 = start frequency
-            bin_hz = float(row[3]) - float(row[2])
-            step = float(row[3]) - float(row[2]) 
+            start_hz = float(row[2])
+            end_hz   = float(row[3])
+            bin_hz   = float(row[4])
+            bins     = np.array(row[6:], dtype=float)
         except ValueError:
             continue
 
-        # FFT bins begin at column 4
-        bins = np.array(row[4:], dtype=float)
+        bins = bins[DROP_BINS:]  # kill hop spike
+        freqs = start_hz + (np.arange(len(bins)) + DROP_BINS) * bin_hz
 
-        # Generate frequency scale for this row
-        row_freqs = np.linspace(float(row[2]), float(row[3]), len(bins))
+        for f_hz, p in zip(freqs, bins):
+            k = int(round(f_hz))
+            acc.setdefault(k, []).append(p)
 
-        freqs.append(row_freqs)
-        powers.append(bins)
+# average
+freqs = np.array(sorted(acc.keys()), dtype=float)
+power = np.array([np.mean(acc[int(k)]) for k in freqs])
 
-# Convert lists to arrays
-freqs = np.array(freqs)
-powers = np.array(powers)
+freq_mhz = freqs / 1e6
 
-# Average the power across all sweeps
-avg_freq = freqs[0]
-avg_power = np.mean(powers, axis=0)
+# focus hydrogen
+center = 1420.4058
+span = 5.0
+mask = (freq_mhz > center - span) & (freq_mhz < center + span)
 
-# Plot
+x = freq_mhz[mask]
+y = power[mask]
+
+# robust vertical scale
+lo, hi = np.percentile(y, [10, 90])
+
 plt.figure(figsize=(12,6))
-plt.plot(avg_freq / 1e6, avg_power)
-plt.xlabel("Frequency in MHz")
-plt.ylabel("Power")
-plt.title("Hydrogen Band Scan (rtl_power average)")
+plt.plot(x, y)
+plt.xlabel("Frequency (MHz)")
+plt.ylabel("Power (dB)")
+plt.title("Hydrogen scan (hop-edge removed)")
+plt.ylim(lo, hi)
 plt.grid(True)
+plt.tight_layout()
 plt.show()
