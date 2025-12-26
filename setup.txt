@@ -183,6 +183,15 @@ Sun Test
 	#    and run it again inside your VNC session
 	python3 plot_hydrogen.py
 
+	#	rtl_power measures average power as a function of frequency by repeatedly tuning the SDR,
+	#	collecting short blocks of samples, converting those samples into the frequency domain
+	#	using FFTs, computing power for each frequency bin, and averaging those power values
+	#	over time.
+	#	For each sweep, the resulting power measurements are written to a CSV file.
+	#	Repeated averaging reduces random noise while preserving stable spectral features
+	#	such as the hydrogen line.
+
+
 	 #Download data file from pi.
 	 scp benschwem@192.168.1.35:/home/benschwem/no_sun_scan_122425_1.csv ~/Downloads/
 
