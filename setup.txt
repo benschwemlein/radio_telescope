@@ -205,6 +205,18 @@ Sun Test
 	2. Run a long, narrow spectral scan around the 1420 MHz hydrogen line to detect weak Milky Way emission.
 	rtl_power_fftw -f 1419.0M:1421.8M -g 40 -i 5 -e 1800 milkyway_hi.csv
 
+
+	rtl_power
+		• steps the tuner across frequencies
+		• does short FFTs at each step
+		• averages per step
+
+	rtl_power_fftw
+		• stays on a fixed frequency window
+		• continuously streams samples
+		• uses FFTW to compute many FFTs efficiently
+		• averages power in stable frequency bins
+
 		
 		
 
