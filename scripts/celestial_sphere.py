@@ -8,8 +8,6 @@ import requests
 from PIL import Image
 
 from PyQt6 import QtCore, QtWidgets
-
-import pyqtgraph as pg
 import pyqtgraph.opengl as gl
 
 
@@ -41,17 +39,17 @@ def rotation_matrix_from_euler(deg_x=0.0, deg_y=0.0, deg_z=0.0) -> np.ndarray:
 
     Rx = np.array([[1, 0, 0],
                    [0, cx, -sx],
-                   [0, sx, cx]])
+                   [0, sx, cx]], dtype=np.float32)
 
     Ry = np.array([[cy, 0, sy],
                    [0, 1, 0],
-                   [-sy, 0, cy]])
+                   [-sy, 0, cy]], dtype=np.float32)
 
     Rz = np.array([[cz, -sz, 0],
                    [sz,  cz, 0],
-                   [0,   0,  1]])
+                   [0,   0,  1]], dtype=np.float32)
 
-    return Rz @ Ry @ Rx
+    return (Rz @ Ry @ Rx).astype(np.float32)
 
 
 def julian_day(dt_utc_naive: datetime) -> float:
@@ -67,14 +65,14 @@ def julian_day(dt_utc_naive: datetime) -> float:
     B = 2 - A + int(A / 4)
 
     jd = int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + d + B - 1524.5
-    return jd
+    return float(jd)
 
 
 def gmst_degrees(dt_utc_naive: datetime) -> float:
     jd = julian_day(dt_utc_naive)
     T = (jd - 2451545.0) / 36525.0
     gmst = 280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T - (T * T * T) / 38710000.0
-    return gmst % 360.0
+    return float(gmst % 360.0)
 
 
 def sun_ra_dec_degrees(dt_utc_naive: datetime) -> tuple[float, float]:
@@ -95,7 +93,7 @@ def sun_ra_dec_degrees(dt_utc_naive: datetime) -> tuple[float, float]:
 
     ra_deg = (np.rad2deg(alpha) % 360.0)
     dec_deg = np.rad2deg(delta)
-    return ra_deg, dec_deg
+    return float(ra_deg), float(dec_deg)
 
 
 def ra_dec_to_unit_vector_equatorial(ra_deg: float, dec_deg: float) -> np.ndarray:
@@ -197,10 +195,10 @@ def build_milky_way_band_equatorial(radius=1.0, half_width_deg=8.0, n=900, m=16,
     rng = np.random.default_rng(seed)
     hw = np.deg2rad(half_width_deg)
 
-    t = np.linspace(0, 2*np.pi, n, endpoint=False)
-    base = np.stack([np.cos(t), np.sin(t), np.zeros_like(t)], axis=1)
+    t = np.linspace(0, 2*np.pi, n, endpoint=False).astype(np.float32)
+    base = np.stack([np.cos(t), np.sin(t), np.zeros_like(t)], axis=1).astype(np.float32)
 
-    offsets = np.linspace(-hw, hw, m)
+    offsets = np.linspace(-hw, hw, m).astype(np.float32)
     pts = []
     alpha = []
 
@@ -210,13 +208,13 @@ def build_milky_way_band_equatorial(radius=1.0, half_width_deg=8.0, n=900, m=16,
         strand[:, 0] *= np.cos(off)
         strand[:, 1] *= np.cos(off)
 
-        noise = rng.normal(0.0, 1.0, size=strand.shape)
+        noise = rng.normal(0.0, 1.0, size=strand.shape).astype(np.float32)
         noise = noise / np.linalg.norm(noise, axis=1, keepdims=True)
         strand = strand + 0.01 * noise
         strand = strand / np.linalg.norm(strand, axis=1, keepdims=True)
         strand = radius * strand
 
-        edge = abs(off) / hw if hw > 0 else 0.0
+        edge = float(abs(off) / hw) if hw > 0 else 0.0
         a = (1.0 - edge) ** 1.8
         pts.append(strand)
         alpha.append(np.full(n, a, dtype=np.float32))
@@ -329,7 +327,7 @@ class MainWindow(QtWidgets.QWidget):
         left.addStretch(1)
 
         self.view = FixedGLViewWidget()
-        self.view.setBackgroundColor("w")
+        self.view.setBackgroundColor((10, 10, 14))
         self.view.set_fixed_distance(2.6)
         layout.addWidget(self.view, 1)
 
@@ -341,41 +339,43 @@ class MainWindow(QtWidgets.QWidget):
         self.roll_slider.valueChanged.connect(self.on_rotation)
 
     def _build_scene(self):
+        # Celestial sphere first: visible but never blocks what is inside
+        s_verts, s_faces, _ = make_uv_sphere(self.radius, n_lon=120, n_lat=60)
+        sky_md = gl.MeshData(vertexes=s_verts, faces=s_faces)
+        self.sky_item = gl.GLMeshItem(
+            meshdata=sky_md,
+            smooth=True,
+            drawFaces=True,
+            drawEdges=False,
+            shader="shaded"
+        )
+        self.sky_item.setColor((0.55, 0.60, 0.70, 0.22))
+        self.sky_item.setGLOptions("additive")
+        self.sky_item.setDepthValue(-10000)
+        self.view.addItem(self.sky_item)
+
+        # Earth
         verts, faces, uv = make_uv_sphere(self.earth_radius, n_lon=160, n_lat=80)
         tex = get_earth_texture("earth_texture.jpg")
         colors = sample_texture(tex, uv)
         colors_rgba = np.concatenate([colors, np.ones((colors.shape[0], 1), dtype=np.float32)], axis=1)
-
         earth_md = gl.MeshData(vertexes=verts, faces=faces, vertexColors=colors_rgba)
         self.earth_item = gl.GLMeshItem(meshdata=earth_md, smooth=True, drawEdges=False, shader="shaded")
         self.earth_item.setGLOptions("opaque")
-        self.earth_item.setDepthValue(1000)
+        self.earth_item.setDepthValue(10000)
         self.view.addItem(self.earth_item)
 
-        s_verts, s_faces, _ = make_uv_sphere(self.radius, n_lon=90, n_lat=45)
-        sky_md = gl.MeshData(vertexes=s_verts, faces=s_faces)
-
-        self.sky_item = gl.GLMeshItem(
-            meshdata=sky_md,
-            smooth=False,
-            drawFaces=False,
-            drawEdges=True,
-            edgeColor=(0.7, 0.7, 0.7, 0.25),
-        )
-        self.sky_item.setGLOptions("additive")   # never blocks what is inside
-        self.sky_item.setDepthValue(-1000)      # draw behind everything
-        self.view.addItem(self.sky_item)
-
-      
-
+        # Horizon ring (local horizon)
         hz = make_ring(self.radius, 500, "xy")
         self.horizon_item = gl.GLLinePlotItem(pos=hz, width=2.0, antialias=True)
         self.view.addItem(self.horizon_item)
 
+        # Celestial equator (will be rotated in update_scene)
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.5, antialias=True)
         self.view.addItem(self.eq_item)
 
+        # NCP axis (will be rotated in update_scene)
         self.axis_item = gl.GLLinePlotItem(
             pos=np.array([[0, 0, 0], [0, 0, self.radius]], dtype=np.float32),
             width=2.0,
@@ -383,6 +383,7 @@ class MainWindow(QtWidgets.QWidget):
         )
         self.view.addItem(self.axis_item)
 
+        # Milky Way points (equatorial frame; rotated in update_scene)
         mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, 8.0, n=900, m=16, seed=7)
         self.mw_pts_eq = mw_pts
         cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
@@ -390,6 +391,7 @@ class MainWindow(QtWidgets.QWidget):
         self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
         self.view.addItem(self.mw_item)
 
+        # Sun disk at true angular radius (0.265 deg)
         sun_ang_radius_deg = 0.265
         disk_radius = self.radius * np.sin(np.deg2rad(sun_ang_radius_deg))
         md = make_disk_mesh(
@@ -436,7 +438,7 @@ class MainWindow(QtWidgets.QWidget):
         gmst = gmst_degrees(self.dt_utc.replace(tzinfo=None))
         lst = (gmst + self.lon) % 360.0
         M = equatorial_to_local_enu_matrix(self.lat, lst)
-        Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw).astype(np.float32)
+        Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw)
         X = (Ruser @ M).astype(np.float32)
 
         eq = make_ring(self.radius, 600, "xy")
