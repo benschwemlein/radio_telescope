@@ -13,6 +13,8 @@ import pyqtgraph.opengl as gl
 
 APP_TZ = ZoneInfo("America/New_York")
 
+ORANGE = (1.0, 0.55, 0.0, 1.0)
+
 
 class FixedGLViewWidget(gl.GLViewWidget):
     # Disable zoom via mouse wheel or trackpad scroll events
@@ -365,15 +367,24 @@ class MainWindow(QtWidgets.QWidget):
         self.earth_item.setDepthValue(10000)
         self.view.addItem(self.earth_item)
 
-        # Horizon ring (local horizon)
+        # Local horizon ring in ORANGE
         hz = make_ring(self.radius, 500, "xy")
-        self.horizon_item = gl.GLLinePlotItem(pos=hz, width=2.0, antialias=True)
+        self.horizon_item = gl.GLLinePlotItem(pos=hz, width=2.5, antialias=True, color=ORANGE)
         self.view.addItem(self.horizon_item)
 
         # Celestial equator (will be rotated in update_scene)
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.5, antialias=True)
         self.view.addItem(self.eq_item)
+
+        # Local zenith axis (perpendicular to local horizon) in ORANGE
+        self.zenith_axis_item = gl.GLLinePlotItem(
+            pos=np.array([[0, 0, 0], [0, 0, self.radius]], dtype=np.float32),
+            width=3.0,
+            antialias=True,
+            color=ORANGE
+        )
+        self.view.addItem(self.zenith_axis_item)
 
         # NCP axis (will be rotated in update_scene)
         self.axis_item = gl.GLLinePlotItem(
@@ -441,18 +452,22 @@ class MainWindow(QtWidgets.QWidget):
         Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw)
         X = (Ruser @ M).astype(np.float32)
 
+        # Rotate the celestial equator
         eq = make_ring(self.radius, 600, "xy")
         eq_local = (X @ eq.T).T
         self.eq_item.setData(pos=eq_local)
 
+        # NCP axis from equatorial frame
         ncp_eq = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         ncp_local = X @ ncp_eq
         axis = np.array([[0, 0, 0], self.radius * ncp_local], dtype=np.float32)
         self.axis_item.setData(pos=axis)
 
+        # Milky Way
         mw_local = (X @ self.mw_pts_eq.T).T
         self.mw_item.setData(pos=mw_local)
 
+        # Sun
         sun_ra, sun_dec = sun_ra_dec_degrees(self.dt_utc.replace(tzinfo=None))
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
         sun_local = X @ sun_eq
