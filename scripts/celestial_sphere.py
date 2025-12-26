@@ -1,4 +1,3 @@
-
 import os
 import sys
 from datetime import datetime, timezone
@@ -15,6 +14,16 @@ import pyqtgraph.opengl as gl
 
 
 APP_TZ = ZoneInfo("America/New_York")
+
+
+class FixedGLViewWidget(gl.GLViewWidget):
+    # Disable zoom via mouse wheel or trackpad scroll events
+    def wheelEvent(self, ev):
+        ev.ignore()
+
+    def set_fixed_distance(self, d: float):
+        self.opts["distance"] = float(d)
+        self.update()
 
 
 def clamp_lat_lon(lat_deg: float, lon_deg: float) -> tuple[float, float]:
@@ -95,30 +104,30 @@ def ra_dec_to_unit_vector_equatorial(ra_deg: float, dec_deg: float) -> np.ndarra
     x = np.cos(dec) * np.cos(ra)
     y = np.cos(dec) * np.sin(ra)
     z = np.sin(dec)
-    return np.array([x, y, z], dtype=float)
+    return np.array([x, y, z], dtype=np.float32)
 
 
 def equatorial_to_local_enu_matrix(lat_deg: float, lst_deg: float) -> np.ndarray:
     lat = np.deg2rad(lat_deg)
     lst = np.deg2rad(lst_deg)
 
-    up = np.array([np.cos(lat) * np.cos(lst), np.cos(lat) * np.sin(lst), np.sin(lat)])
+    up = np.array([np.cos(lat) * np.cos(lst), np.cos(lat) * np.sin(lst), np.sin(lat)], dtype=np.float32)
 
-    north = np.array([-np.sin(lat) * np.cos(lst), -np.sin(lat) * np.sin(lst), np.cos(lat)])
+    north = np.array([-np.sin(lat) * np.cos(lst), -np.sin(lat) * np.sin(lst), np.cos(lat)], dtype=np.float32)
     north = north / np.linalg.norm(north)
 
     east = np.cross(north, up)
     east = east / np.linalg.norm(east)
 
-    M = np.vstack([east, north, up])
+    M = np.vstack([east, north, up]).astype(np.float32)
     return M
 
 
 def unit_vector_enu_to_alt_az(v_enu: np.ndarray) -> tuple[float, float]:
-    x, y, z = v_enu
+    x, y, z = float(v_enu[0]), float(v_enu[1]), float(v_enu[2])
     alt = np.rad2deg(np.arcsin(np.clip(z, -1.0, 1.0)))
     az = np.rad2deg(np.arctan2(x, y)) % 360.0
-    return alt, az
+    return float(alt), float(az)
 
 
 def get_earth_texture(path="earth_texture.jpg") -> np.ndarray:
@@ -143,7 +152,7 @@ def make_uv_sphere(radius: float, n_lon: int, n_lat: int):
     y = radius * np.cos(lat_grid) * np.sin(lon_grid)
     z = radius * np.sin(lat_grid)
 
-    verts = np.stack([x, y, z], axis=-1).reshape(-1, 3)
+    verts = np.stack([x, y, z], axis=-1).reshape(-1, 3).astype(np.float32)
 
     faces = []
     for j in range(n_lat - 1):
@@ -157,7 +166,7 @@ def make_uv_sphere(radius: float, n_lon: int, n_lat: int):
             faces.append([b, c, d])
     faces = np.array(faces, dtype=np.int32)
 
-    uv = np.stack([(lon_grid / (2*np.pi)), (0.5 - lat_grid / np.pi)], axis=-1).reshape(-1, 2)
+    uv = np.stack([(lon_grid / (2*np.pi)), (0.5 - lat_grid / np.pi)], axis=-1).reshape(-1, 2).astype(np.float32)
     return verts, faces, uv
 
 
@@ -173,7 +182,7 @@ def sample_texture(texture_rgb: np.ndarray, uv: np.ndarray) -> np.ndarray:
     return colors
 
 
-def make_ring(radius: float, n: int, plane="xy"):
+def make_ring(radius: float, n: int, plane="xy") -> np.ndarray:
     t = np.linspace(0, 2*np.pi, n, endpoint=True)
     if plane == "xy":
         pts = np.stack([radius*np.cos(t), radius*np.sin(t), np.zeros_like(t)], axis=1)
@@ -181,7 +190,7 @@ def make_ring(radius: float, n: int, plane="xy"):
         pts = np.stack([radius*np.cos(t), np.zeros_like(t), radius*np.sin(t)], axis=1)
     else:
         pts = np.stack([np.zeros_like(t), radius*np.cos(t), radius*np.sin(t)], axis=1)
-    return pts
+    return pts.astype(np.float32)
 
 
 def build_milky_way_band_equatorial(radius=1.0, half_width_deg=8.0, n=900, m=16, seed=7):
@@ -212,11 +221,43 @@ def build_milky_way_band_equatorial(radius=1.0, half_width_deg=8.0, n=900, m=16,
         pts.append(strand)
         alpha.append(np.full(n, a, dtype=np.float32))
 
-    P = np.concatenate(pts, axis=0)
-    A = np.concatenate(alpha, axis=0)
-    Rmw = rotation_matrix_from_euler(25.0, -20.0, 15.0)
+    P = np.concatenate(pts, axis=0).astype(np.float32)
+    A = np.concatenate(alpha, axis=0).astype(np.float32)
+
+    Rmw = rotation_matrix_from_euler(25.0, -20.0, 15.0).astype(np.float32)
     P = (Rmw @ P.T).T
     return P, A
+
+
+def orthonormal_basis_from_normal(n: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    n = n / np.linalg.norm(n)
+    a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    if abs(float(np.dot(a, n))) > 0.9:
+        a = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    u = np.cross(n, a)
+    u = u / np.linalg.norm(u)
+    v = np.cross(n, u)
+    v = v / np.linalg.norm(v)
+    return u.astype(np.float32), v.astype(np.float32)
+
+
+def make_disk_mesh(center: np.ndarray, normal: np.ndarray, radius: float, segments: int = 56) -> gl.MeshData:
+    u, v = orthonormal_basis_from_normal(normal)
+
+    verts = [center.astype(np.float32)]
+    for k in range(segments + 1):
+        t = 2.0 * np.pi * k / segments
+        p = center + radius * (np.cos(t) * u + np.sin(t) * v)
+        verts.append(p.astype(np.float32))
+
+    verts = np.array(verts, dtype=np.float32)
+
+    faces = []
+    for k in range(1, segments + 1):
+        faces.append([0, k, k + 1])
+    faces = np.array(faces, dtype=np.int32)
+
+    return gl.MeshData(vertexes=verts, faces=faces)
 
 
 class MainWindow(QtWidgets.QWidget):
@@ -225,7 +266,7 @@ class MainWindow(QtWidgets.QWidget):
         self.setWindowTitle("Celestial Sphere")
 
         self.radius = 1.0
-        self.earth_radius = 0.18
+        self.earth_radius = 0.30
 
         self.lat = 39.9612
         self.lon = -82.9988
@@ -287,9 +328,9 @@ class MainWindow(QtWidgets.QWidget):
 
         left.addStretch(1)
 
-        self.view = gl.GLViewWidget()
-        self.view.opts["distance"] = 3.2
+        self.view = FixedGLViewWidget()
         self.view.setBackgroundColor("w")
+        self.view.set_fixed_distance(2.6)
         layout.addWidget(self.view, 1)
 
         self.apply_btn.clicked.connect(self.on_apply)
@@ -300,32 +341,46 @@ class MainWindow(QtWidgets.QWidget):
         self.roll_slider.valueChanged.connect(self.on_rotation)
 
     def _build_scene(self):
-        verts, faces, uv = make_uv_sphere(self.earth_radius, n_lon=140, n_lat=70)
+        verts, faces, uv = make_uv_sphere(self.earth_radius, n_lon=160, n_lat=80)
         tex = get_earth_texture("earth_texture.jpg")
         colors = sample_texture(tex, uv)
         colors_rgba = np.concatenate([colors, np.ones((colors.shape[0], 1), dtype=np.float32)], axis=1)
 
-        self.earth_meshdata = gl.MeshData(vertexes=verts, faces=faces, vertexColors=colors_rgba)
-        self.earth_item = gl.GLMeshItem(meshdata=self.earth_meshdata, smooth=True, drawEdges=False, shader="shaded")
+        earth_md = gl.MeshData(vertexes=verts, faces=faces, vertexColors=colors_rgba)
+        self.earth_item = gl.GLMeshItem(meshdata=earth_md, smooth=True, drawEdges=False, shader="shaded")
+        self.earth_item.setGLOptions("opaque")
+        self.earth_item.setDepthValue(1000)
         self.view.addItem(self.earth_item)
 
         s_verts, s_faces, _ = make_uv_sphere(self.radius, n_lon=90, n_lat=45)
-        s_colors = np.ones((s_verts.shape[0], 4), dtype=np.float32)
-        s_colors[:, 3] = 0.10
-        self.sky_meshdata = gl.MeshData(vertexes=s_verts, faces=s_faces, vertexColors=s_colors)
-        self.sky_item = gl.GLMeshItem(meshdata=self.sky_meshdata, smooth=True, drawEdges=False, shader="shaded")
+        sky_md = gl.MeshData(vertexes=s_verts, faces=s_faces)
+
+        self.sky_item = gl.GLMeshItem(
+            meshdata=sky_md,
+            smooth=False,
+            drawFaces=False,
+            drawEdges=True,
+            edgeColor=(0.7, 0.7, 0.7, 0.25),
+        )
+        self.sky_item.setGLOptions("additive")   # never blocks what is inside
+        self.sky_item.setDepthValue(-1000)      # draw behind everything
         self.view.addItem(self.sky_item)
 
-        hz = make_ring(self.radius, 400, "xy")
+      
+
+        hz = make_ring(self.radius, 500, "xy")
         self.horizon_item = gl.GLLinePlotItem(pos=hz, width=2.0, antialias=True)
         self.view.addItem(self.horizon_item)
 
-        eq = make_ring(self.radius, 500, "xy")
+        eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.5, antialias=True)
         self.view.addItem(self.eq_item)
 
-        self.axis_item = gl.GLLinePlotItem(pos=np.array([[0, 0, 0], [0, 0, self.radius]], dtype=np.float32),
-                                           width=2.0, antialias=True)
+        self.axis_item = gl.GLLinePlotItem(
+            pos=np.array([[0, 0, 0], [0, 0, self.radius]], dtype=np.float32),
+            width=2.0,
+            antialias=True
+        )
         self.view.addItem(self.axis_item)
 
         mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, 8.0, n=900, m=16, seed=7)
@@ -335,12 +390,17 @@ class MainWindow(QtWidgets.QWidget):
         self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
         self.view.addItem(self.mw_item)
 
-        self.sun_item = gl.GLScatterPlotItem(pos=np.array([[0, 0, 0]], dtype=np.float32),
-                                             size=10.0, color=(1.0, 0.6, 0.0, 1.0), pxMode=True)
+        sun_ang_radius_deg = 0.265
+        disk_radius = self.radius * np.sin(np.deg2rad(sun_ang_radius_deg))
+        md = make_disk_mesh(
+            center=np.array([self.radius, 0.0, 0.0], dtype=np.float32),
+            normal=np.array([1.0, 0.0, 0.0], dtype=np.float32),
+            radius=disk_radius,
+            segments=56
+        )
+        self.sun_item = gl.GLMeshItem(meshdata=md, smooth=True, drawEdges=False, shader="shaded")
+        self.sun_item.setColor((1.0, 0.75, 0.1, 1.0))
         self.view.addItem(self.sun_item)
-
-        self.scene_group = gl.GLGraphicsItem.GLGraphicsItem()
-        self.view.addItem(self.scene_group)
 
     def on_now(self):
         self.dt_local = datetime.now(APP_TZ)
@@ -376,10 +436,10 @@ class MainWindow(QtWidgets.QWidget):
         gmst = gmst_degrees(self.dt_utc.replace(tzinfo=None))
         lst = (gmst + self.lon) % 360.0
         M = equatorial_to_local_enu_matrix(self.lat, lst)
-        Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw)
-        X = Ruser @ M
+        Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw).astype(np.float32)
+        X = (Ruser @ M).astype(np.float32)
 
-        eq = make_ring(self.radius, 500, "xy")
+        eq = make_ring(self.radius, 600, "xy")
         eq_local = (X @ eq.T).T
         self.eq_item.setData(pos=eq_local)
 
@@ -395,7 +455,16 @@ class MainWindow(QtWidgets.QWidget):
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
         sun_local = X @ sun_eq
         sun_pos = (self.radius * sun_local).astype(np.float32)
-        self.sun_item.setData(pos=np.array([sun_pos], dtype=np.float32))
+
+        sun_ang_radius_deg = 0.265
+        disk_radius = self.radius * np.sin(np.deg2rad(sun_ang_radius_deg))
+        md = make_disk_mesh(
+            center=sun_pos,
+            normal=sun_local.astype(np.float32),
+            radius=disk_radius,
+            segments=56
+        )
+        self.sun_item.setMeshData(meshdata=md)
 
         alt, az = unit_vector_enu_to_alt_az(sun_local)
         self.info.setText(
