@@ -195,6 +195,15 @@ Sun Test
 	 #Download data file from pi.
 	 scp benschwem@192.168.1.35:/home/benschwem/no_sun_scan_122425_1.csv ~/Downloads/
 
+	##############################################
+	# Milky Way
+	##############################################
+
+	# 1. Turn on bias tee for SAWbird H1
+	rtl_biast -b 1
+	
+	2. Run a long, narrow spectral scan around the 1420 MHz hydrogen line to detect weak Milky Way emission.
+	rtl_power_fftw -f 1419.0M:1421.8M -g 40 -i 5 -e 1800 milkyway_hi.csv
 
 		
 		
