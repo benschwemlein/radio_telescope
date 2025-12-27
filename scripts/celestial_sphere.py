@@ -427,12 +427,7 @@ class MainWindow(QtWidgets.QWidget):
         hz0 = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
         self.horizon_item = gl.GLLinePlotItem(pos=hz0, width=2.5, antialias=True, color=ORANGE)
         self.view.addItem(self.horizon_item)
-
-        # Orange local zenith axis (from center of Earth)
-        axis0 = np.array([[0, 0, 0], [0, 0, self.radius]], dtype=np.float32)
-        self.zenith_axis_item = gl.GLLinePlotItem(pos=axis0, width=3.0, antialias=True, color=ORANGE)
-        self.view.addItem(self.zenith_axis_item)
-
+      
         # Celestial equator (white)
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
@@ -505,9 +500,6 @@ class MainWindow(QtWidgets.QWidget):
         # Update orange horizon ring and zenith axis in Earth-fixed frame, then rotate by Ruser
         horizon_ecef = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
         up_ecef = latlon_to_unit_ecef(self.lat, self.lon)
-
-        self.horizon_item.setData(pos=apply_R(horizon_ecef, Ruser))
-        self.zenith_axis_item.setData(pos=apply_R(np.array([[0, 0, 0], self.radius * up_ecef], dtype=np.float32), Ruser))
 
         # Update location dot on Earth surface, rotated same as Earth
         p = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
