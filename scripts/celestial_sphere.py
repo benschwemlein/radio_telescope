@@ -433,15 +433,6 @@ class MainWindow(QtWidgets.QWidget):
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
         self.view.addItem(self.eq_item)
 
-        # North celestial pole axis (white)
-        self.ncp_axis_item = gl.GLLinePlotItem(
-            pos=np.array([[0, 0, 0], [0, 0, self.radius]], dtype=np.float32),
-            width=2.0,
-            antialias=True,
-            color=WHITE
-        )
-        self.view.addItem(self.ncp_axis_item)
-
         # Milky Way band points (white w/ alpha)
         mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, 8.0, n=900, m=16, seed=7)
         self.mw_pts_eq = mw_pts
@@ -515,11 +506,6 @@ class MainWindow(QtWidgets.QWidget):
         # Celestial equator (eq XY plane) into view
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item.setData(pos=(X @ eq.T).T.astype(np.float32))
-
-        # NCP axis
-        ncp_eq = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        ncp_local = X @ ncp_eq
-        self.ncp_axis_item.setData(pos=np.array([[0, 0, 0], self.radius * ncp_local], dtype=np.float32))
 
         # Milky Way
         self.mw_item.setData(pos=(X @ self.mw_pts_eq.T).T.astype(np.float32))
