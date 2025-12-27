@@ -357,23 +357,6 @@ class MainWindow(QtWidgets.QWidget):
         btn_row.addWidget(self.now_btn)
         left.addLayout(btn_row)
 
-        left.addWidget(QtWidgets.QLabel("Manual rotation"))
-
-        self.yaw_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.pitch_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.roll_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        for s in (self.yaw_slider, self.pitch_slider, self.roll_slider):
-            s.setMinimum(-180)
-            s.setMaximum(180)
-            s.setValue(0)
-
-        left.addWidget(QtWidgets.QLabel("Yaw (deg)"))
-        left.addWidget(self.yaw_slider)
-        left.addWidget(QtWidgets.QLabel("Pitch (deg)"))
-        left.addWidget(self.pitch_slider)
-        left.addWidget(QtWidgets.QLabel("Roll (deg)"))
-        left.addWidget(self.roll_slider)
-
         self.info = QtWidgets.QLabel("")
         self.info.setWordWrap(True)
         left.addWidget(self.info)
@@ -387,10 +370,6 @@ class MainWindow(QtWidgets.QWidget):
 
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
-
-        self.yaw_slider.valueChanged.connect(self.on_rotation)
-        self.pitch_slider.valueChanged.connect(self.on_rotation)
-        self.roll_slider.valueChanged.connect(self.on_rotation)
 
     def _build_scene(self):
         # Celestial sphere (transparent)
@@ -489,12 +468,6 @@ class MainWindow(QtWidgets.QWidget):
         self.dt_local = datetime.now(APP_TZ)
         self.time_edit.setText(self.dt_local.strftime("%Y-%m-%d %H:%M:%S"))
         self.on_apply()
-
-    def on_rotation(self):
-        self.yaw = float(self.yaw_slider.value())
-        self.pitch = float(self.pitch_slider.value())
-        self.roll = float(self.roll_slider.value())
-        self.update_scene()
 
     def on_apply(self):
         try:
