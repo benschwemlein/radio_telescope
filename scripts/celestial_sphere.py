@@ -1,13 +1,13 @@
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import requests
 from PIL import Image
 
-from PyQt6 import QtWidgets, QtCore
+from PyQt6 import QtWidgets
 import pyqtgraph.opengl as gl
 
 
@@ -26,54 +26,15 @@ EARTH_ROT_SIGN = 1.0
 # Sun angular radius is about 0.265 degrees
 SUN_ANG_RADIUS_DEG = 0.265
 
-# Visualization mode: sky items always draw on top of Earth
+# If True, sky items draw on top of Earth (visualization mode)
 SKY_ALWAYS_ON_TOP = True
 
 
 class FixedGLViewWidget(gl.GLViewWidget):
-    """
-    Mouse rotates camera only.
-    No zoom, no pan, no changing center.
-    """
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        try:
-            from PyQt6.QtGui import QVector3D
-            self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
-        except Exception:
-            pass
-
+    # Mouse rotates camera only
+    # Disable zoom via wheel or trackpad scroll
     def wheelEvent(self, ev):
         ev.ignore()
-
-    def keyPressEvent(self, ev):
-        ev.ignore()
-
-    def keyReleaseEvent(self, ev):
-        ev.ignore()
-
-    def mouseMoveEvent(self, ev):
-        btns = ev.buttons()
-        if btns & QtCore.Qt.MouseButton.RightButton:
-            ev.ignore()
-            return
-        if btns & QtCore.Qt.MouseButton.MiddleButton:
-            ev.ignore()
-            return
-
-        try:
-            from PyQt6.QtGui import QVector3D
-            self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
-        except Exception:
-            pass
-
-        super().mouseMoveEvent(ev)
-
-        try:
-            from PyQt6.QtGui import QVector3D
-            self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
-        except Exception:
-            pass
 
     def set_fixed_distance(self, d: float):
         self.opts["distance"] = float(d)
@@ -264,8 +225,11 @@ def make_ring(radius: float, n: int, plane="xy") -> np.ndarray:
     return pts.astype(np.float32)
 
 
-def gal_to_eq_matrix_j2000() -> np.ndarray:
-    # IAU J2000 Galactic to Equatorial rotation
+def eq_to_gal_matrix_j2000() -> np.ndarray:
+    """
+    IAU J2000 Equatorial to Galactic rotation.
+    This is the matrix with the widely published coefficients.
+    """
     return np.array([
         [-0.0548755604, -0.8734370902, -0.4838350155],
         [ 0.4941094279, -0.4448296300,  0.7469822445],
@@ -273,81 +237,52 @@ def gal_to_eq_matrix_j2000() -> np.ndarray:
     ], dtype=np.float32)
 
 
-def eq_to_gal_matrix_j2000() -> np.ndarray:
-    return gal_to_eq_matrix_j2000().T.astype(np.float32)
+def gal_to_eq_matrix_j2000() -> np.ndarray:
+    """
+    Galactic to Equatorial is the transpose of the orthonormal rotation.
+    """
+    return eq_to_gal_matrix_j2000().T.astype(np.float32)
 
 
-def build_milky_way_band_equatorial(
-    radius=1.0,
-    n_l=2200,
-    m_b=55,
-    seed=7,
-    base_half_width_deg=6.0,
-    center_extra_width_deg=14.0,
-    center_brighten=2.6,
-):
-    """
-    Variable width and brightness Milky Way band.
-    Output is equatorial J2000 unit vectors scaled to radius plus alpha 0..1.
-    """
+def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=33, seed=7):
     rng = np.random.default_rng(seed)
-    R = gal_to_eq_matrix_j2000()
 
-    l = np.linspace(0.0, 2.0 * np.pi, n_l, endpoint=False).astype(np.float32)
+    # Correct direction: Galactic -> Equatorial for drawing the galactic plane on the equatorial sky
+    R_g2e = gal_to_eq_matrix_j2000()
+
+    l = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False).astype(np.float32)
+    hw = np.deg2rad(half_width_deg).astype(np.float32)
+    b_vals = np.linspace(-hw, hw, m).astype(np.float32)
 
     pts = []
     alpha = []
 
-    for i in range(n_l):
-        li = float(l[i])
+    for b in b_vals:
+        cb = np.cos(b)
+        sb = np.sin(b)
 
-        dl = (li + np.pi) % (2.0 * np.pi) - np.pi
-        absdl = abs(dl)
+        xg = cb * np.cos(l)
+        yg = cb * np.sin(l)
+        zg = np.full_like(l, sb)
+        g = np.stack([xg, yg, zg], axis=1).astype(np.float32)
 
-        center_weight = np.exp(-(absdl / 0.75) ** 2)
-        half_width_deg = base_half_width_deg + center_extra_width_deg * center_weight
-        hw = float(np.deg2rad(half_width_deg))
+        noise = rng.normal(0.0, 1.0, size=g.shape).astype(np.float32)
+        noise = noise / np.linalg.norm(noise, axis=1, keepdims=True)
+        g = g + 0.008 * noise
+        g = g / np.linalg.norm(g, axis=1, keepdims=True)
 
-        b_vals = np.linspace(-hw, hw, m_b).astype(np.float32)
+        e = (R_g2e @ g.T).T.astype(np.float32)
+        e = e / np.linalg.norm(e, axis=1, keepdims=True)
+        e = radius * e
 
-        bump1 = np.exp(-(((absdl - 0.9) / 0.45) ** 2))
-        bump2 = np.exp(-(((absdl - 1.8) / 0.55) ** 2))
-        long_bright = 0.45 + center_brighten * center_weight + 0.55 * bump1 + 0.35 * bump2
+        edge = abs(float(b) / float(hw)) if float(hw) > 0.0 else 0.0
+        a = (1.0 - edge) ** 1.8
 
-        for b in b_vals:
-            cb = np.cos(b)
-            sb = np.sin(b)
+        pts.append(e)
+        alpha.append(np.full(n, a, dtype=np.float32))
 
-            xg = cb * np.cos(li)
-            yg = cb * np.sin(li)
-            zg = sb
-            g = np.array([xg, yg, zg], dtype=np.float32)
-
-            noise = rng.normal(0.0, 1.0, size=3).astype(np.float32)
-            noise = noise / (np.linalg.norm(noise) + 1e-12)
-            g = g + 0.010 * noise
-            g = g / (np.linalg.norm(g) + 1e-12)
-
-            e = (R @ g.reshape(3, 1)).ravel().astype(np.float32)
-            e = e / (np.linalg.norm(e) + 1e-12)
-            e = radius * e
-
-            edge = abs(float(b)) / (hw + 1e-12)
-            lat_bright = (1.0 - min(1.0, edge)) ** 2.2
-
-            a = float(long_bright) * float(lat_bright)
-
-            pts.append(e)
-            alpha.append(a)
-
-    P = np.array(pts, dtype=np.float32)
-    A = np.array(alpha, dtype=np.float32)
-
-    A = A - float(A.min())
-    mx = float(A.max())
-    if mx > 1e-12:
-        A = A / mx
-
+    P = np.concatenate(pts, axis=0).astype(np.float32)
+    A = np.concatenate(alpha, axis=0).astype(np.float32)
     return P, A
 
 
@@ -449,6 +384,12 @@ def dot_rows(M: np.ndarray) -> tuple[float, float, float]:
     )
 
 
+def angular_sep_deg(u: np.ndarray, v: np.ndarray) -> float:
+    u = u / (np.linalg.norm(u) + 1e-12)
+    v = v / (np.linalg.norm(v) + 1e-12)
+    return float(np.rad2deg(np.arccos(np.clip(np.dot(u, v), -1.0, 1.0))))
+
+
 def sun_galactic_l_b_deg(sun_eq_unit: np.ndarray) -> tuple[float, float]:
     E2G = eq_to_gal_matrix_j2000()
     g = (E2G @ sun_eq_unit.reshape(3, 1)).ravel()
@@ -459,10 +400,36 @@ def sun_galactic_l_b_deg(sun_eq_unit: np.ndarray) -> tuple[float, float]:
     return float(l), float(b)
 
 
-def angular_sep_deg(u: np.ndarray, v: np.ndarray) -> float:
-    u = u / (np.linalg.norm(u) + 1e-12)
-    v = v / (np.linalg.norm(v) + 1e-12)
-    return float(np.rad2deg(np.arccos(np.clip(np.dot(u, v), -1.0, 1.0))))
+def gc_unit_eq() -> np.ndarray:
+    # J2000 galactic center approx: RA 266.4051 deg, Dec -28.936175 deg
+    return ra_dec_to_unit_vector_equatorial(266.4051, -28.936175)
+
+
+def find_max_alt_over_24h(lat_deg: float, lon_deg: float, start_local: datetime, step_minutes: int = 4):
+    v_gc = gc_unit_eq()
+    best_alt = None
+    best_az = None
+    best_time = None
+
+    for k in range(int(24 * 60 / step_minutes) + 1):
+        dt_local = start_local + timedelta(minutes=k * step_minutes)
+        dt_utc = dt_local.astimezone(timezone.utc)
+        dt_utc_naive = dt_utc.replace(tzinfo=None)
+
+        gmst = gmst_degrees(dt_utc_naive)
+        lst = (gmst + lon_deg) % 360.0
+
+        M = equatorial_to_local_enu_matrix(lat_deg, lst).astype(np.float32)
+        v_loc = (M @ v_gc.reshape(3, 1)).ravel().astype(np.float32)
+        v_loc = v_loc / (np.linalg.norm(v_loc) + 1e-12)
+        alt, az = unit_vector_enu_to_alt_az(v_loc)
+
+        if best_alt is None or alt > best_alt:
+            best_alt = alt
+            best_az = az
+            best_time = dt_local
+
+    return float(best_alt), float(best_az), best_time
 
 
 class MainWindow(QtWidgets.QWidget):
@@ -520,7 +487,7 @@ class MainWindow(QtWidgets.QWidget):
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
 
-    def _apply_sky_draw_mode(self, item, depth_value: int):
+    def _sky_options(self, item, depth_value: int):
         if SKY_ALWAYS_ON_TOP:
             item.setGLOptions("additive")
             item.setDepthValue(depth_value)
@@ -529,27 +496,26 @@ class MainWindow(QtWidgets.QWidget):
             item.setDepthValue(0)
 
     def _build_scene(self):
-        # Celestial sphere shell, purely visual
+        # Celestial sphere shell
         s_verts, s_faces, _ = make_uv_sphere(self.radius, n_lon=120, n_lat=60)
         sky_md = gl.MeshData(vertexes=s_verts, faces=s_faces)
         self.sky_item = gl.GLMeshItem(meshdata=sky_md, smooth=True, drawFaces=True, drawEdges=False, shader="shaded")
         self.sky_item.setColor((0.50, 0.55, 0.65, 0.18))
-        self._apply_sky_draw_mode(self.sky_item, -10000)
+        self._sky_options(self.sky_item, -10000)
         self.view.addItem(self.sky_item)
 
-        # Earth with land and ocean
+        # Earth
         verts, faces, uv = make_uv_sphere(self.earth_radius, n_lon=180, n_lat=90)
         tex = get_earth_texture("earth_texture.jpg")
         colors = sample_texture(tex, uv)
         colors_rgba = np.concatenate([colors, np.ones((colors.shape[0], 1), dtype=np.float32)], axis=1)
-
         earth_md = gl.MeshData(vertexes=verts, faces=faces, vertexColors=colors_rgba)
         self.earth_item = gl.GLMeshItem(meshdata=earth_md, smooth=True, drawEdges=False, shader="shaded")
         self.earth_item.setGLOptions("opaque")
         self.earth_item.setDepthValue(10000)
         self.view.addItem(self.earth_item)
 
-        # Orange location marker sphere on Earth's surface
+        # Location marker
         marker_r = self.earth_radius * 0.05
         m_verts, m_faces, _ = make_uv_sphere(marker_r, n_lon=36, n_lat=18)
         m_md = gl.MeshData(vertexes=m_verts, faces=m_faces)
@@ -559,37 +525,29 @@ class MainWindow(QtWidgets.QWidget):
         self.loc_marker.setDepthValue(20000)
         self.view.addItem(self.loc_marker)
 
-        # Orange horizon ring, centered on Earth
+        # Horizon ring (Earth fixed, rotated with Earth)
         hz0 = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
         self.horizon_item = gl.GLLinePlotItem(pos=hz0, width=2.5, antialias=True, color=ORANGE)
         self.horizon_item.setGLOptions("translucent")
         self.horizon_item.setDepthValue(25000)
         self.view.addItem(self.horizon_item)
 
-        # Celestial equator in equatorial coordinates
+        # Celestial equator (will be transformed to local ENU)
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
-        self._apply_sky_draw_mode(self.eq_item, 999998)
+        self._sky_options(self.eq_item, 999998)
         self.view.addItem(self.eq_item)
 
-        # Milky Way band in equatorial coordinates
-        mw_pts, mw_a = build_milky_way_band_equatorial(
-            radius=self.radius,
-            n_l=2200,
-            m_b=55,
-            seed=7,
-            base_half_width_deg=6.0,
-            center_extra_width_deg=14.0,
-            center_brighten=2.6,
-        )
+        # Milky Way band in equatorial coordinates (corrected via g2e transpose)
+        mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, half_width_deg=10.0, n=1600, m=33, seed=7)
         self.mw_pts_eq = mw_pts
-        cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
-        cols[:, 3] = 0.03 + 0.90 * (mw_a ** 1.1)
-        self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
-        self._apply_sky_draw_mode(self.mw_item, 999999)
+        self.mw_cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
+        self.mw_cols[:, 3] = 0.08 + 0.75 * np.clip(mw_a, 0.0, 1.0)
+        self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=self.mw_cols, pxMode=True)
+        self._sky_options(self.mw_item, 999999)
         self.view.addItem(self.mw_item)
 
-        # Sun disk and dot
+        # Sun disk and dot (will be transformed to local ENU)
         disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         md = make_disk_mesh(
             center=np.array([self.radius, 0.0, 0.0], dtype=np.float32),
@@ -620,6 +578,16 @@ class MainWindow(QtWidgets.QWidget):
         self.earth_axis_item.setGLOptions("translucent")
         self.earth_axis_item.setDepthValue(20000)
         self.view.addItem(self.earth_axis_item)
+
+        # Optional galactic center dot on the sky (for sanity checking)
+        self.gc_dot = gl.GLScatterPlotItem(
+            pos=np.array([[self.radius, 0.0, 0.0]], dtype=np.float32),
+            size=9.0,
+            color=np.array([[0.65, 0.80, 1.0, 1.0]], dtype=np.float32),
+            pxMode=True
+        )
+        self._sky_options(self.gc_dot, 999997)
+        self.view.addItem(self.gc_dot)
 
     def on_now(self):
         self.dt_local = datetime.now(APP_TZ)
@@ -652,8 +620,10 @@ class MainWindow(QtWidgets.QWidget):
         gmst = gmst_degrees(dt_utc_naive)
         lst = (gmst + self.lon) % 360.0
 
+        # Earth rotates in inertial frame by GMST
         Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
 
+        # Earth fixed geometry, rotate by Rearth into view
         p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
         p_view = (Rearth @ p_ecef).astype(np.float32)
 
@@ -669,28 +639,36 @@ class MainWindow(QtWidgets.QWidget):
         axis_view = (Rearth @ axis_ecef.T).T.astype(np.float32)
         self.earth_axis_item.setData(pos=axis_view)
 
-        # Sky items in equatorial inertial coordinates
-        self.eq_item.setData(pos=make_ring(self.radius, 600, "xy"))
-        self.mw_item.setData(pos=self.mw_pts_eq)
+        # Sky transform: equatorial to local ENU using LST
+        M = equatorial_to_local_enu_matrix(self.lat, lst).astype(np.float32)
 
-        # Sun in equatorial inertial coordinates
+        # Celestial equator ring into local ENU
+        eq = make_ring(self.radius, 600, "xy")
+        eq_local = (M @ eq.T).T.astype(np.float32)
+        self.eq_item.setData(pos=eq_local)
+
+        # Milky Way points are in equatorial XYZ, convert to local ENU
+        mw_local = (M @ self.mw_pts_eq.T).T.astype(np.float32)
+        self.mw_item.setData(pos=mw_local, color=self.mw_cols)
+
+        # Sun in equatorial
         sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
 
-        sun_pos_eq = (self.radius * sun_eq).astype(np.float32)
-        self.sun_dot.setData(pos=sun_pos_eq.reshape(1, 3))
+        # Sun to local ENU
+        sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
+        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
+
+        sun_pos = (self.radius * sun_local).astype(np.float32)
+        self.sun_dot.setData(pos=sun_pos.reshape(1, 3))
 
         disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         self.sun_item.setMeshData(meshdata=make_disk_mesh(
-            center=sun_pos_eq,
-            normal=sun_eq.astype(np.float32),
+            center=sun_pos,
+            normal=sun_local.astype(np.float32),
             radius=disk_radius,
             segments=56
         ))
-
-        M = equatorial_to_local_enu_matrix(self.lat, lst).astype(np.float32)
-        sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
-        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
 
         alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
         alt_formula, az_formula = alt_az_from_ra_dec(self.lat, lst, sun_ra, sun_dec)
@@ -704,8 +682,28 @@ class MainWindow(QtWidgets.QWidget):
             f"Sun alt {alt_vec:.2f} deg  az {az_vec:.2f} deg"
         )
 
+        # Galactic center dot for sanity checking
+        gc_eq = gc_unit_eq()
+        gc_local = (M @ gc_eq.reshape(3, 1)).ravel().astype(np.float32)
+        gc_local = gc_local / (np.linalg.norm(gc_local) + 1e-12)
+        gc_pos = (self.radius * gc_local).astype(np.float32)
+        self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
+
         if DEBUG_VERBOSE:
             ha = (lst - sun_ra) % 360.0
+            scp = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+            ncp = np.array([0.0, 0.0,  1.0], dtype=np.float32)
+
+            gc_sep_scp = angular_sep_deg(gc_eq, scp)
+            gc_sep_ncp = angular_sep_deg(gc_eq, ncp)
+            gc_alt, gc_az = unit_vector_enu_to_alt_az(gc_local)
+
+            # Strong internal consistency check: closest Milky Way point to GC should be small separation
+            mw_dirs_eq = self.mw_pts_eq / (self.radius + 1e-12)
+            dots = np.clip(mw_dirs_eq @ (gc_eq / (np.linalg.norm(gc_eq) + 1e-12)), -1.0, 1.0)
+            min_sep = float(np.rad2deg(np.arccos(float(np.max(dots)))))
+
+            best_alt_24h, best_az_24h, best_time_24h = find_max_alt_over_24h(self.lat, self.lon, self.dt_local, step_minutes=4)
 
             print("\nDEBUG")
             print(f"Local time {self.dt_local.strftime('%Y-%m-%d %H:%M:%S')} {APP_TZ.key}")
@@ -746,9 +744,20 @@ class MainWindow(QtWidgets.QWidget):
             print(f"\nObserver ECEF model {vstr(p_ecef)}")
             print(f"Observer view  model {vstr(p_view)}")
 
+            print("\nGalactic Center sanity checks")
+            print(f"  GC eq unit {vstr(gc_eq)}")
+            print(f"  GC local alt {gc_alt: .6f} deg  az {gc_az: .6f} deg")
+            print(f"  GC angle to south celestial pole {gc_sep_scp: .6f} deg (expected about 61.064)")
+            print(f"  GC angle to north celestial pole {gc_sep_ncp: .6f} deg (expected about 118.936)")
+            print(f"  Min angular sep between GC and Milky Way points {min_sep: .6f} deg (should be small)")
+
+            print("\nGC visibility over next 24h")
+            print(f"  GC max alt {best_alt_24h: .6f} deg at {best_time_24h.strftime('%Y-%m-%d %H:%M:%S')} local  az {best_az_24h: .6f} deg")
+
             print("END DEBUG")
 
-        # Mouse movement does not trigger recompute
+        # Mouse movement does not trigger any recompute
+        # Only Apply, Now, and startup call update_scene
 
 
 def main():
