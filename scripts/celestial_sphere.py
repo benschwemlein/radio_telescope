@@ -472,6 +472,19 @@ class MainWindow(QtWidgets.QWidget):
 
         self.view.addItem(self.earth_axis_item)
 
+        # Small orange marker sphere on Earth's surface (lat/lon)
+        marker_r = self.earth_radius * 0.05  # adjust size here
+
+        m_verts, m_faces, _ = make_uv_sphere(marker_r, n_lon=36, n_lat=18)
+        m_md = gl.MeshData(vertexes=m_verts, faces=m_faces)
+
+        self.loc_marker = gl.GLMeshItem(meshdata=m_md, smooth=True, drawEdges=False, shader="shaded")
+        self.loc_marker.setColor(ORANGE)
+        self.loc_marker.setGLOptions("translucent")   # so it stays visible
+        self.loc_marker.setDepthValue(20000)
+        self.view.addItem(self.loc_marker)
+
+
     def on_now(self):
         self.dt_local = datetime.now(APP_TZ)
         self.time_edit.setText(self.dt_local.strftime("%Y-%m-%d %H:%M:%S"))
@@ -505,6 +518,12 @@ class MainWindow(QtWidgets.QWidget):
     def update_scene(self):
         # Manual rotation applied to Earth + orange local frame (treat as one object)
         Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw).astype(np.float32)
+
+        # Position marker at observer location on Earth surface
+        p = latlon_to_ecef(self.lat, self.lon, self.earth_radius)          # ECEF
+        p_view = apply_R(p.reshape(1, 3), Ruser)[0]                        # rotate with Earth
+        self.loc_marker.resetTransform()
+        self.loc_marker.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
 
         # Update orange horizon ring and zenith axis in Earth-fixed frame, then rotate by Ruser
         horizon_ecef = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
