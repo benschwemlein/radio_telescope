@@ -465,6 +465,12 @@ def sun_galactic_l_b_deg(sun_eq_unit: np.ndarray) -> tuple[float, float]:
     return float(l), float(b)
 
 
+def angular_sep_deg(u: np.ndarray, v: np.ndarray) -> float:
+    u = u / (np.linalg.norm(u) + 1e-12)
+    v = v / (np.linalg.norm(v) + 1e-12)
+    return float(np.rad2deg(np.arccos(np.clip(np.dot(u, v), -1.0, 1.0))))
+
+
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -731,12 +737,46 @@ class MainWindow(QtWidgets.QWidget):
             print(f"Alt deg from formula {alt_formula: .6f}")
             print(f"Az deg from formula  {az_formula: .6f}")
 
-            print(f"\nSun galactic l deg {l_gal: .6f}")
-            print(f"Sun galactic b deg {b_gal: .6f}")
+            print(f"\nSun galactic l deg  {l_gal: .6f}")
+            print(f"Sun galactic b deg  {b_gal: .6f}")
             print(f"Sun absolute off plane deg {abs(b_gal): .6f}")
 
             print(f"\nObserver ECEF model {vstr(p_ecef)}")
             print(f"Observer view  model {vstr(p_view)}")
+
+            # ---- Galactic placement diagnostics ----
+            gc_eq = ra_dec_to_unit_vector_equatorial(266.4051, -28.936175)  # galactic center
+            ac_eq = ra_dec_to_unit_vector_equatorial(86.4051, 28.936175)    # anticenter approx
+            ngp_eq = ra_dec_to_unit_vector_equatorial(192.85948, 27.12825)  # north galactic pole
+            scp_eq = np.array([0.0, 0.0, -1.0], dtype=np.float32)           # south celestial pole
+
+            gal_plane_normal = ngp_eq  # normal to galactic plane
+
+            def dump_obj(name: str, v_eq: np.ndarray):
+                v_eq = v_eq.astype(np.float32)
+                v_loc = (M @ v_eq.reshape(3, 1)).ravel().astype(np.float32)
+                v_loc = v_loc / (np.linalg.norm(v_loc) + 1e-12)
+
+                alt, az = unit_vector_enu_to_alt_az(v_loc)
+
+                off_plane = angular_sep_deg(v_eq, gal_plane_normal) - 90.0
+                off_scp = angular_sep_deg(v_eq, scp_eq)
+
+                print(f"\n{name}")
+                print(f"  eq unit {vstr(v_eq)}")
+                print(f"  alt {alt: .3f} deg   az {az: .3f} deg")
+                print(f"  off galactic plane {off_plane: .3f} deg")
+                print(f"  dist to south celestial pole {off_scp: .3f} deg")
+
+            dump_obj("Galactic Center", gc_eq)
+            dump_obj("Galactic Anticenter", ac_eq)
+            dump_obj("North Galactic Pole", ngp_eq)
+
+            print("\nExpected checks:")
+            print("  GC off plane ≈ 0 deg")
+            print("  NGP off plane ≈ +90 deg")
+            print("  GC dist to SCP ≈ 61 deg")
+
             print("END DEBUG")
 
         # Mouse movement does not trigger recompute
