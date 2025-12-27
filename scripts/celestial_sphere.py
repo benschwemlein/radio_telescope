@@ -34,8 +34,6 @@ class FixedGLViewWidget(gl.GLViewWidget):
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        # Lock orbit center at origin
         try:
             from PyQt6.QtGui import QVector3D
             self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
@@ -43,16 +41,15 @@ class FixedGLViewWidget(gl.GLViewWidget):
             pass
 
     def wheelEvent(self, ev):
-        ev.ignore()  # disable zoom
+        ev.ignore()
 
     def keyPressEvent(self, ev):
-        ev.ignore()  # disable keyboard camera moves
+        ev.ignore()
 
     def keyReleaseEvent(self, ev):
         ev.ignore()
 
     def mouseMoveEvent(self, ev):
-        # Only allow left drag orbit rotation. Ignore right or middle drag panning.
         btns = ev.buttons()
         if btns & QtCore.Qt.MouseButton.RightButton:
             ev.ignore()
@@ -61,7 +58,6 @@ class FixedGLViewWidget(gl.GLViewWidget):
             ev.ignore()
             return
 
-        # Force center back to origin so it never drifts.
         try:
             from PyQt6.QtGui import QVector3D
             self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
@@ -278,43 +274,86 @@ def eq_to_gal_matrix_j2000() -> np.ndarray:
     return gal_to_eq_matrix_j2000().T.astype(np.float32)
 
 
-def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=33, seed=7):
+def build_milky_way_band_equatorial(
+    radius=1.0,
+    n_l=2200,
+    m_b=55,
+    seed=7,
+    base_half_width_deg=6.0,
+    center_extra_width_deg=14.0,
+    center_brighten=2.6,
+):
+    """
+    Variable width and brightness Milky Way band.
+
+    Width is thicker near galactic center and thinner near anticenter.
+    Brightness is higher near center with broad bumps to hint at structure.
+    Output is equatorial J2000 unit vectors scaled to radius plus alpha 0..1.
+    """
     rng = np.random.default_rng(seed)
     R = gal_to_eq_matrix_j2000()
 
-    l = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False).astype(np.float32)
-    hw = np.deg2rad(half_width_deg).astype(np.float32)
-    b_vals = np.linspace(-hw, hw, m).astype(np.float32)
+    l = np.linspace(0.0, 2.0 * np.pi, n_l, endpoint=False).astype(np.float32)
 
     pts = []
     alpha = []
 
-    for b in b_vals:
-        cb = np.cos(b)
-        sb = np.sin(b)
+    for i in range(n_l):
+        li = float(l[i])
 
-        xg = cb * np.cos(l)
-        yg = cb * np.sin(l)
-        zg = np.full_like(l, sb)
-        g = np.stack([xg, yg, zg], axis=1).astype(np.float32)
+        # distance in longitude from galactic center, wrapped to [-pi, pi]
+        dl = (li + np.pi) % (2.0 * np.pi) - np.pi
+        absdl = abs(dl)
 
-        noise = rng.normal(0.0, 1.0, size=g.shape).astype(np.float32)
-        noise = noise / np.linalg.norm(noise, axis=1, keepdims=True)
-        g = g + 0.008 * noise
-        g = g / np.linalg.norm(g, axis=1, keepdims=True)
+        # width profile
+        center_weight = np.exp(-(absdl / 0.75) ** 2)
+        half_width_deg = base_half_width_deg + center_extra_width_deg * center_weight
+        hw = float(np.deg2rad(half_width_deg))
 
-        e = (R @ g.T).T.astype(np.float32)
-        e = e / np.linalg.norm(e, axis=1, keepdims=True)
-        e = radius * e
+        b_vals = np.linspace(-hw, hw, m_b).astype(np.float32)
 
-        edge = abs(float(b) / float(hw)) if float(hw) > 0.0 else 0.0
-        a = (1.0 - edge) ** 1.8
+        # brightness along longitude
+        bump1 = np.exp(-(((absdl - 0.9) / 0.45) ** 2))
+        bump2 = np.exp(-(((absdl - 1.8) / 0.55) ** 2))
+        long_bright = 0.45 + center_brighten * center_weight + 0.55 * bump1 + 0.35 * bump2
 
-        pts.append(e)
-        alpha.append(np.full(n, a, dtype=np.float32))
+        for b in b_vals:
+            cb = np.cos(b)
+            sb = np.sin(b)
 
-    P = np.concatenate(pts, axis=0).astype(np.float32)
-    A = np.concatenate(alpha, axis=0).astype(np.float32)
+            xg = cb * np.cos(li)
+            yg = cb * np.sin(li)
+            zg = sb
+            g = np.array([xg, yg, zg], dtype=np.float32)
+
+            # jitter so ribbon is not perfect
+            noise = rng.normal(0.0, 1.0, size=3).astype(np.float32)
+            noise = noise / (np.linalg.norm(noise) + 1e-12)
+            g = g + 0.010 * noise
+            g = g / (np.linalg.norm(g) + 1e-12)
+
+            # galactic to equatorial
+            e = (R @ g.reshape(3, 1)).ravel().astype(np.float32)
+            e = e / (np.linalg.norm(e) + 1e-12)
+            e = radius * e
+
+            # brightness across latitude
+            edge = abs(float(b)) / (hw + 1e-12)
+            lat_bright = (1.0 - min(1.0, edge)) ** 2.2
+
+            a = float(long_bright) * float(lat_bright)
+
+            pts.append(e)
+            alpha.append(a)
+
+    P = np.array(pts, dtype=np.float32)
+    A = np.array(alpha, dtype=np.float32)
+
+    A = A - float(A.min())
+    mx = float(A.max())
+    if mx > 1e-12:
+        A = A / mx
+
     return P, A
 
 
@@ -518,20 +557,28 @@ class MainWindow(QtWidgets.QWidget):
         self.horizon_item = gl.GLLinePlotItem(pos=hz0, width=2.5, antialias=True, color=ORANGE)
         self.view.addItem(self.horizon_item)
 
-        # Celestial equator (equatorial XY plane)
+        # Celestial equator in equatorial coordinates
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
         self.view.addItem(self.eq_item)
 
-        # Milky Way band in equatorial coordinates
-        mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, half_width_deg=10.0, n=1600, m=33, seed=7)
+        # Milky Way band in equatorial coordinates with variable width and brightness
+        mw_pts, mw_a = build_milky_way_band_equatorial(
+            radius=self.radius,
+            n_l=2200,
+            m_b=55,
+            seed=7,
+            base_half_width_deg=6.0,
+            center_extra_width_deg=14.0,
+            center_brighten=2.6,
+        )
         self.mw_pts_eq = mw_pts
         cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
-        cols[:, 3] = 0.08 + 0.75 * np.clip(mw_a, 0.0, 1.0)
+        cols[:, 3] = 0.03 + 0.90 * (mw_a ** 1.1)
         self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
         self.view.addItem(self.mw_item)
 
-        # Sun disk and dot (positions will be updated)
+        # Sun disk and dot
         disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         md = make_disk_mesh(
             center=np.array([self.radius, 0.0, 0.0], dtype=np.float32),
@@ -613,8 +660,7 @@ class MainWindow(QtWidgets.QWidget):
         axis_view = (Rearth @ axis_ecef.T).T.astype(np.float32)
         self.earth_axis_item.setData(pos=axis_view)
 
-        # Sky items are rendered in equatorial inertial coordinates
-        # (same frame the horizon ring ends up in after rotating ECEF by GMST)
+        # Sky items rendered in equatorial inertial coordinates
         self.eq_item.setData(pos=make_ring(self.radius, 600, "xy"))
         self.mw_item.setData(pos=self.mw_pts_eq)
 
