@@ -432,6 +432,21 @@ class MainWindow(QtWidgets.QWidget):
         self.sun_item = gl.GLMeshItem(meshdata=md, smooth=True, drawEdges=False, shader="shaded")
         self.sun_item.setColor((1.0, 0.78, 0.12, 1.0))
         self.view.addItem(self.sun_item)
+        self.sun_item.setGLOptions("translucent")
+        self.sun_item.setDepthValue(30000)
+
+
+        # Sun marker dot (always visible)
+        self.sun_dot = gl.GLScatterPlotItem(
+            pos=np.array([[self.radius, 0.0, 0.0]], dtype=np.float32),
+            size=12.0,
+            color=np.array([[1.0, 0.78, 0.12, 1.0]], dtype=np.float32),
+            pxMode=True
+        )
+        self.sun_dot.setGLOptions("translucent")
+        self.sun_dot.setDepthValue(30000)
+        self.view.addItem(self.sun_dot)
+
 
         # Earth rotation axis (through poles)
         axis_pts = np.array(
@@ -525,6 +540,7 @@ class MainWindow(QtWidgets.QWidget):
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
         sun_local = X @ sun_eq
         sun_pos = (self.radius * sun_local).astype(np.float32)
+        self.sun_dot.setData(pos=sun_pos.reshape(1, 3))
 
         sun_ang_radius_deg = 0.265
         disk_radius = self.radius * np.sin(np.deg2rad(sun_ang_radius_deg))
