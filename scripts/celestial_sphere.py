@@ -16,7 +16,7 @@ APP_TZ = ZoneInfo("America/New_York")
 # Colors (r,g,b,a) in 0..1
 ORANGE = (1.0, 0.55, 0.0, 1.0)
 WHITE = (0.92, 0.92, 0.92, 1.0)
-
+GOLD = (1.0, 0.84, 0.0, 1.0)
 
 class FixedGLViewWidget(gl.GLViewWidget):
     # Disable zoom via mouse wheel / trackpad
@@ -453,6 +453,24 @@ class MainWindow(QtWidgets.QWidget):
         self.sun_item = gl.GLMeshItem(meshdata=md, smooth=True, drawEdges=False, shader="shaded")
         self.sun_item.setColor((1.0, 0.78, 0.12, 1.0))
         self.view.addItem(self.sun_item)
+
+        # Earth rotation axis (through poles)
+        axis_pts = np.array(
+            [[0.0, 0.0, -self.radius],
+            [0.0, 0.0,  self.radius]],
+            dtype=np.float32
+        )
+
+        self.earth_axis_item = gl.GLLinePlotItem(
+            pos=axis_pts,
+            width=4.5,          # thicker, as requested
+            antialias=True,
+            color=GOLD
+        )
+        self.earth_axis_item.setGLOptions("translucent")  # disables depth test so it draws on top
+        self.earth_axis_item.setDepthValue(20000)         # make sure it draws after the Earth
+
+        self.view.addItem(self.earth_axis_item)
 
     def on_now(self):
         self.dt_local = datetime.now(APP_TZ)
