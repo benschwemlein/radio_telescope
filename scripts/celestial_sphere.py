@@ -26,6 +26,9 @@ EARTH_ROT_SIGN = 1.0
 # Sun angular radius is about 0.265 degrees
 SUN_ANG_RADIUS_DEG = 0.265
 
+# Visualization mode: sky items always draw on top of Earth
+SKY_ALWAYS_ON_TOP = True
+
 
 class FixedGLViewWidget(gl.GLViewWidget):
     """
@@ -285,9 +288,6 @@ def build_milky_way_band_equatorial(
 ):
     """
     Variable width and brightness Milky Way band.
-
-    Width is thicker near galactic center and thinner near anticenter.
-    Brightness is higher near center with broad bumps to hint at structure.
     Output is equatorial J2000 unit vectors scaled to radius plus alpha 0..1.
     """
     rng = np.random.default_rng(seed)
@@ -301,18 +301,15 @@ def build_milky_way_band_equatorial(
     for i in range(n_l):
         li = float(l[i])
 
-        # distance in longitude from galactic center, wrapped to [-pi, pi]
         dl = (li + np.pi) % (2.0 * np.pi) - np.pi
         absdl = abs(dl)
 
-        # width profile
         center_weight = np.exp(-(absdl / 0.75) ** 2)
         half_width_deg = base_half_width_deg + center_extra_width_deg * center_weight
         hw = float(np.deg2rad(half_width_deg))
 
         b_vals = np.linspace(-hw, hw, m_b).astype(np.float32)
 
-        # brightness along longitude
         bump1 = np.exp(-(((absdl - 0.9) / 0.45) ** 2))
         bump2 = np.exp(-(((absdl - 1.8) / 0.55) ** 2))
         long_bright = 0.45 + center_brighten * center_weight + 0.55 * bump1 + 0.35 * bump2
@@ -326,18 +323,15 @@ def build_milky_way_band_equatorial(
             zg = sb
             g = np.array([xg, yg, zg], dtype=np.float32)
 
-            # jitter so ribbon is not perfect
             noise = rng.normal(0.0, 1.0, size=3).astype(np.float32)
             noise = noise / (np.linalg.norm(noise) + 1e-12)
             g = g + 0.010 * noise
             g = g / (np.linalg.norm(g) + 1e-12)
 
-            # galactic to equatorial
             e = (R @ g.reshape(3, 1)).ravel().astype(np.float32)
             e = e / (np.linalg.norm(e) + 1e-12)
             e = radius * e
 
-            # brightness across latitude
             edge = abs(float(b)) / (hw + 1e-12)
             lat_bright = (1.0 - min(1.0, edge)) ** 2.2
 
@@ -526,14 +520,21 @@ class MainWindow(QtWidgets.QWidget):
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
 
+    def _apply_sky_draw_mode(self, item, depth_value: int):
+        if SKY_ALWAYS_ON_TOP:
+            item.setGLOptions("additive")
+            item.setDepthValue(depth_value)
+        else:
+            item.setGLOptions("translucent")
+            item.setDepthValue(0)
+
     def _build_scene(self):
         # Celestial sphere shell, purely visual
         s_verts, s_faces, _ = make_uv_sphere(self.radius, n_lon=120, n_lat=60)
         sky_md = gl.MeshData(vertexes=s_verts, faces=s_faces)
         self.sky_item = gl.GLMeshItem(meshdata=sky_md, smooth=True, drawFaces=True, drawEdges=False, shader="shaded")
         self.sky_item.setColor((0.50, 0.55, 0.65, 0.18))
-        self.sky_item.setGLOptions("additive")
-        self.sky_item.setDepthValue(-10000)
+        self._apply_sky_draw_mode(self.sky_item, -10000)
         self.view.addItem(self.sky_item)
 
         # Earth with land and ocean
@@ -561,14 +562,17 @@ class MainWindow(QtWidgets.QWidget):
         # Orange horizon ring, centered on Earth
         hz0 = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
         self.horizon_item = gl.GLLinePlotItem(pos=hz0, width=2.5, antialias=True, color=ORANGE)
+        self.horizon_item.setGLOptions("translucent")
+        self.horizon_item.setDepthValue(25000)
         self.view.addItem(self.horizon_item)
 
         # Celestial equator in equatorial coordinates
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
+        self._apply_sky_draw_mode(self.eq_item, 999998)
         self.view.addItem(self.eq_item)
 
-        # Milky Way band in equatorial coordinates with variable width and brightness
+        # Milky Way band in equatorial coordinates
         mw_pts, mw_a = build_milky_way_band_equatorial(
             radius=self.radius,
             n_l=2200,
@@ -582,6 +586,7 @@ class MainWindow(QtWidgets.QWidget):
         cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
         cols[:, 3] = 0.03 + 0.90 * (mw_a ** 1.1)
         self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
+        self._apply_sky_draw_mode(self.mw_item, 999999)
         self.view.addItem(self.mw_item)
 
         # Sun disk and dot
@@ -647,10 +652,8 @@ class MainWindow(QtWidgets.QWidget):
         gmst = gmst_degrees(dt_utc_naive)
         lst = (gmst + self.lon) % 360.0
 
-        # Earth rotates in inertial frame by GMST
         Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
 
-        # Earth fixed geometry, rotate by Rearth into inertial view
         p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
         p_view = (Rearth @ p_ecef).astype(np.float32)
 
@@ -666,7 +669,7 @@ class MainWindow(QtWidgets.QWidget):
         axis_view = (Rearth @ axis_ecef.T).T.astype(np.float32)
         self.earth_axis_item.setData(pos=axis_view)
 
-        # Sky items rendered in equatorial inertial coordinates
+        # Sky items in equatorial inertial coordinates
         self.eq_item.setData(pos=make_ring(self.radius, 600, "xy"))
         self.mw_item.setData(pos=self.mw_pts_eq)
 
@@ -685,7 +688,6 @@ class MainWindow(QtWidgets.QWidget):
             segments=56
         ))
 
-        # Compute local alt and az for display using ENU transform
         M = equatorial_to_local_enu_matrix(self.lat, lst).astype(np.float32)
         sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
         sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
@@ -737,50 +739,16 @@ class MainWindow(QtWidgets.QWidget):
             print(f"Alt deg from formula {alt_formula: .6f}")
             print(f"Az deg from formula  {az_formula: .6f}")
 
-            print(f"\nSun galactic l deg  {l_gal: .6f}")
-            print(f"Sun galactic b deg  {b_gal: .6f}")
+            print(f"\nSun galactic l deg   {l_gal: .6f}")
+            print(f"Sun galactic b deg   {b_gal: .6f}")
             print(f"Sun absolute off plane deg {abs(b_gal): .6f}")
 
             print(f"\nObserver ECEF model {vstr(p_ecef)}")
             print(f"Observer view  model {vstr(p_view)}")
 
-            # ---- Galactic placement diagnostics ----
-            gc_eq = ra_dec_to_unit_vector_equatorial(266.4051, -28.936175)  # galactic center
-            ac_eq = ra_dec_to_unit_vector_equatorial(86.4051, 28.936175)    # anticenter approx
-            ngp_eq = ra_dec_to_unit_vector_equatorial(192.85948, 27.12825)  # north galactic pole
-            scp_eq = np.array([0.0, 0.0, -1.0], dtype=np.float32)           # south celestial pole
-
-            gal_plane_normal = ngp_eq  # normal to galactic plane
-
-            def dump_obj(name: str, v_eq: np.ndarray):
-                v_eq = v_eq.astype(np.float32)
-                v_loc = (M @ v_eq.reshape(3, 1)).ravel().astype(np.float32)
-                v_loc = v_loc / (np.linalg.norm(v_loc) + 1e-12)
-
-                alt, az = unit_vector_enu_to_alt_az(v_loc)
-
-                off_plane = angular_sep_deg(v_eq, gal_plane_normal) - 90.0
-                off_scp = angular_sep_deg(v_eq, scp_eq)
-
-                print(f"\n{name}")
-                print(f"  eq unit {vstr(v_eq)}")
-                print(f"  alt {alt: .3f} deg   az {az: .3f} deg")
-                print(f"  off galactic plane {off_plane: .3f} deg")
-                print(f"  dist to south celestial pole {off_scp: .3f} deg")
-
-            dump_obj("Galactic Center", gc_eq)
-            dump_obj("Galactic Anticenter", ac_eq)
-            dump_obj("North Galactic Pole", ngp_eq)
-
-            print("\nExpected checks:")
-            print("  GC off plane ≈ 0 deg")
-            print("  NGP off plane ≈ +90 deg")
-            print("  GC dist to SCP ≈ 61 deg")
-
             print("END DEBUG")
 
         # Mouse movement does not trigger recompute
-        # Only Apply, Now, and startup call update_scene
 
 
 def main():
