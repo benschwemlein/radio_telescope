@@ -13,14 +13,23 @@ import pyqtgraph.opengl as gl
 
 APP_TZ = ZoneInfo("America/New_York")
 
+# Colors (r,g,b,a) in 0..1
 ORANGE = (1.0, 0.55, 0.0, 1.0)
 WHITE = (0.92, 0.92, 0.92, 1.0)
 GOLD = (1.0, 0.84, 0.0, 1.0)
 
 DEBUG_VERBOSE = True
 
+# If the Earth appears to rotate the wrong way relative to time, flip this to -1.0
+EARTH_ROT_SIGN = 1.0
+
+# Sun angular radius is about 0.265 degrees
+SUN_ANG_RADIUS_DEG = 0.265
+
 
 class FixedGLViewWidget(gl.GLViewWidget):
+    # Mouse rotates camera (whole scene) only
+    # Disable zoom via wheel or trackpad scroll
     def wheelEvent(self, ev):
         ev.ignore()
 
@@ -35,28 +44,6 @@ def clamp_lat_lon(lat_deg: float, lon_deg: float) -> tuple[float, float]:
     return lat, lon
 
 
-def rotation_matrix_from_euler(deg_x=0.0, deg_y=0.0, deg_z=0.0) -> np.ndarray:
-    rx, ry, rz = np.deg2rad([deg_x, deg_y, deg_z])
-
-    cx, sx = np.cos(rx), np.sin(rx)
-    cy, sy = np.cos(ry), np.sin(ry)
-    cz, sz = np.cos(rz), np.sin(rz)
-
-    Rx = np.array([[1, 0, 0],
-                   [0, cx, -sx],
-                   [0, sx, cx]], dtype=np.float32)
-
-    Ry = np.array([[cy, 0, sy],
-                   [0, 1, 0],
-                   [-sy, 0, cy]], dtype=np.float32)
-
-    Rz = np.array([[cz, -sz, 0],
-                   [sz,  cz, 0],
-                   [0,   0,  1]], dtype=np.float32)
-
-    return (Rz @ Ry @ Rx).astype(np.float32)
-
-
 def julian_day(dt_utc_naive: datetime) -> float:
     y = dt_utc_naive.year
     m = dt_utc_naive.month
@@ -68,6 +55,7 @@ def julian_day(dt_utc_naive: datetime) -> float:
 
     A = int(y / 100)
     B = 2 - A + int(A / 4)
+
     jd = int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + d + B - 1524.5
     return float(jd)
 
@@ -75,8 +63,23 @@ def julian_day(dt_utc_naive: datetime) -> float:
 def gmst_degrees(dt_utc_naive: datetime) -> float:
     jd = julian_day(dt_utc_naive)
     T = (jd - 2451545.0) / 36525.0
-    gmst = 280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T - (T * T * T) / 38710000.0
+    gmst = (
+        280.46061837
+        + 360.98564736629 * (jd - 2451545.0)
+        + 0.000387933 * T * T
+        - (T * T * T) / 38710000.0
+    )
     return float(gmst % 360.0)
+
+
+def rotz_deg(deg: float) -> np.ndarray:
+    a = np.deg2rad(deg)
+    ca, sa = np.cos(a), np.sin(a)
+    return np.array([
+        [ca, -sa, 0.0],
+        [sa,  ca, 0.0],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float32)
 
 
 def sun_ra_dec_degrees(dt_utc_naive: datetime) -> tuple[float, float]:
@@ -112,6 +115,7 @@ def ra_dec_to_unit_vector_equatorial(ra_deg: float, dec_deg: float) -> np.ndarra
 def equatorial_to_local_enu_matrix(lat_deg: float, lst_deg: float) -> np.ndarray:
     """
     v_enu = M @ v_eq
+    Rows are east, north, up expressed in equatorial XYZ basis.
     """
     lat = np.deg2rad(lat_deg)
     lst = np.deg2rad(lst_deg)
@@ -123,7 +127,8 @@ def equatorial_to_local_enu_matrix(lat_deg: float, lst_deg: float) -> np.ndarray
     north = np.array([-sl * ct, -sl * st, cl], dtype=np.float32)
     up = np.array([cl * ct, cl * st, sl], dtype=np.float32)
 
-    return np.vstack([east, north, up]).astype(np.float32)
+    M = np.vstack([east, north, up]).astype(np.float32)
+    return M
 
 
 def unit_vector_enu_to_alt_az(v_enu: np.ndarray) -> tuple[float, float]:
@@ -131,6 +136,24 @@ def unit_vector_enu_to_alt_az(v_enu: np.ndarray) -> tuple[float, float]:
     alt = np.rad2deg(np.arcsin(np.clip(z, -1.0, 1.0)))
     az = np.rad2deg(np.arctan2(x, y)) % 360.0
     return float(alt), float(az)
+
+
+def alt_az_from_ra_dec(lat_deg: float, lst_deg: float, ra_deg: float, dec_deg: float) -> tuple[float, float]:
+    lat = np.deg2rad(lat_deg)
+    ha = np.deg2rad((lst_deg - ra_deg) % 360.0)
+    dec = np.deg2rad(dec_deg)
+
+    sin_alt = np.sin(dec) * np.sin(lat) + np.cos(dec) * np.cos(lat) * np.cos(ha)
+    alt = np.arcsin(np.clip(sin_alt, -1.0, 1.0))
+
+    cos_az = (np.sin(dec) - np.sin(alt) * np.sin(lat)) / (np.cos(alt) * np.cos(lat) + 1e-12)
+    cos_az = np.clip(cos_az, -1.0, 1.0)
+    az = np.arccos(cos_az)
+
+    if np.sin(ha) > 0:
+        az = 2 * np.pi - az
+
+    return float(np.rad2deg(alt)), float(np.rad2deg(az) % 360.0)
 
 
 def get_earth_texture(path="earth_texture.jpg") -> np.ndarray:
@@ -200,6 +223,7 @@ def make_ring(radius: float, n: int, plane="xy") -> np.ndarray:
 
 
 def gal_to_eq_matrix_j2000() -> np.ndarray:
+    # IAU J2000 Galactic to Equatorial rotation
     return np.array([
         [-0.0548755604, -0.8734370902, -0.4838350155],
         [ 0.4941094279, -0.4448296300,  0.7469822445],
@@ -211,7 +235,7 @@ def eq_to_gal_matrix_j2000() -> np.ndarray:
     return gal_to_eq_matrix_j2000().T.astype(np.float32)
 
 
-def build_milky_way_band_equatorial(radius=1.0, half_width_deg=8.0, n=1600, m=33, seed=7):
+def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=33, seed=7):
     rng = np.random.default_rng(seed)
     R = gal_to_eq_matrix_j2000()
 
@@ -316,10 +340,6 @@ def make_horizon_ring_ecef(radius: float, lat_deg: float, lon_deg: float, n: int
     return pts.astype(np.float32)
 
 
-def apply_R(points: np.ndarray, R: np.ndarray) -> np.ndarray:
-    return (R @ points.T).T.astype(np.float32)
-
-
 def vstr(v: np.ndarray) -> str:
     v = np.asarray(v).astype(float).ravel()
     return f"[{v[0]: .6f}, {v[1]: .6f}, {v[2]: .6f}]"
@@ -328,23 +348,39 @@ def vstr(v: np.ndarray) -> str:
 def mstr(M: np.ndarray) -> str:
     M = np.asarray(M).astype(float)
     return (
-        f"\n"
+        "\n"
         f"  [{M[0,0]: .6f} {M[0,1]: .6f} {M[0,2]: .6f}]\n"
         f"  [{M[1,0]: .6f} {M[1,1]: .6f} {M[1,2]: .6f}]\n"
         f"  [{M[2,0]: .6f} {M[2,1]: .6f} {M[2,2]: .6f}]"
     )
 
 
-def angle_deg(u: np.ndarray, v: np.ndarray) -> float:
-    u = np.asarray(u).astype(float).ravel()
-    v = np.asarray(v).astype(float).ravel()
-    cu = np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v))
-    cu = float(np.clip(cu, -1.0, 1.0))
-    return float(np.rad2deg(np.arccos(cu)))
+def det3(M: np.ndarray) -> float:
+    return float(np.linalg.det(np.asarray(M).astype(float)))
 
 
-def wrap180(deg: float) -> float:
-    return float(((deg + 180.0) % 360.0) - 180.0)
+def row_norms(M: np.ndarray) -> list[float]:
+    M = np.asarray(M).astype(float)
+    return [float(np.linalg.norm(M[i, :])) for i in range(3)]
+
+
+def dot_rows(M: np.ndarray) -> tuple[float, float, float]:
+    M = np.asarray(M).astype(float)
+    return (
+        float(np.dot(M[0, :], M[1, :])),
+        float(np.dot(M[0, :], M[2, :])),
+        float(np.dot(M[1, :], M[2, :])),
+    )
+
+
+def sun_galactic_l_b_deg(sun_eq_unit: np.ndarray) -> tuple[float, float]:
+    E2G = eq_to_gal_matrix_j2000()
+    g = (E2G @ sun_eq_unit.reshape(3, 1)).ravel()
+    g = g / (np.linalg.norm(g) + 1e-12)
+    x, y, z = float(g[0]), float(g[1]), float(g[2])
+    b = np.rad2deg(np.arcsin(np.clip(z, -1.0, 1.0)))
+    l = np.rad2deg(np.arctan2(y, x)) % 360.0
+    return float(l), float(b)
 
 
 class MainWindow(QtWidgets.QWidget):
@@ -359,10 +395,6 @@ class MainWindow(QtWidgets.QWidget):
         self.lon = -82.9988
         self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
-
-        self.yaw = 0.0
-        self.pitch = 0.0
-        self.roll = 0.0
 
         self._build_ui()
         self._build_scene()
@@ -407,6 +439,7 @@ class MainWindow(QtWidgets.QWidget):
         self.now_btn.clicked.connect(self.on_now)
 
     def _build_scene(self):
+        # Celestial sphere shell, purely visual
         s_verts, s_faces, _ = make_uv_sphere(self.radius, n_lon=120, n_lat=60)
         sky_md = gl.MeshData(vertexes=s_verts, faces=s_faces)
         self.sky_item = gl.GLMeshItem(meshdata=sky_md, smooth=True, drawFaces=True, drawEdges=False, shader="shaded")
@@ -415,6 +448,7 @@ class MainWindow(QtWidgets.QWidget):
         self.sky_item.setDepthValue(-10000)
         self.view.addItem(self.sky_item)
 
+        # Earth with land and ocean
         verts, faces, uv = make_uv_sphere(self.earth_radius, n_lon=180, n_lat=90)
         tex = get_earth_texture("earth_texture.jpg")
         colors = sample_texture(tex, uv)
@@ -426,31 +460,36 @@ class MainWindow(QtWidgets.QWidget):
         self.earth_item.setDepthValue(10000)
         self.view.addItem(self.earth_item)
 
-        self.loc_dot = gl.GLScatterPlotItem(
-            pos=np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
-            size=10.0,
-            color=np.array([ORANGE], dtype=np.float32),
-            pxMode=True
-        )
-        self.view.addItem(self.loc_dot)
+        # Orange location marker sphere on Earth's surface
+        marker_r = self.earth_radius * 0.05
+        m_verts, m_faces, _ = make_uv_sphere(marker_r, n_lon=36, n_lat=18)
+        m_md = gl.MeshData(vertexes=m_verts, faces=m_faces)
+        self.loc_marker = gl.GLMeshItem(meshdata=m_md, smooth=True, drawEdges=False, shader="shaded")
+        self.loc_marker.setColor(ORANGE)
+        self.loc_marker.setGLOptions("translucent")
+        self.loc_marker.setDepthValue(20000)
+        self.view.addItem(self.loc_marker)
 
+        # Orange horizon ring, centered on Earth
         hz0 = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
         self.horizon_item = gl.GLLinePlotItem(pos=hz0, width=2.5, antialias=True, color=ORANGE)
         self.view.addItem(self.horizon_item)
 
+        # Celestial equator
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
         self.view.addItem(self.eq_item)
 
-        mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, 10.0, n=1600, m=33, seed=7)
+        # Milky Way band, real galactic plane projected into equatorial coordinates
+        mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, half_width_deg=10.0, n=1600, m=33, seed=7)
         self.mw_pts_eq = mw_pts
         cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
         cols[:, 3] = 0.08 + 0.75 * np.clip(mw_a, 0.0, 1.0)
         self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
         self.view.addItem(self.mw_item)
 
-        sun_ang_radius_deg = 0.265
-        disk_radius = self.radius * np.sin(np.deg2rad(sun_ang_radius_deg))
+        # Sun disk and dot
+        disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         md = make_disk_mesh(
             center=np.array([self.radius, 0.0, 0.0], dtype=np.float32),
             normal=np.array([1.0, 0.0, 0.0], dtype=np.float32),
@@ -473,29 +512,13 @@ class MainWindow(QtWidgets.QWidget):
         self.sun_dot.setDepthValue(30000)
         self.view.addItem(self.sun_dot)
 
-        axis_pts = np.array(
-            [[0.0, 0.0, -self.radius],
-             [0.0, 0.0,  self.radius]],
-            dtype=np.float32
-        )
-        self.earth_axis_item = gl.GLLinePlotItem(
-            pos=axis_pts,
-            width=4.5,
-            antialias=True,
-            color=GOLD
-        )
+        # Earth rotation axis line, drawn on top
+        axis_pts = np.array([[0.0, 0.0, -self.radius],
+                             [0.0, 0.0,  self.radius]], dtype=np.float32)
+        self.earth_axis_item = gl.GLLinePlotItem(pos=axis_pts, width=4.5, antialias=True, color=GOLD)
         self.earth_axis_item.setGLOptions("translucent")
         self.earth_axis_item.setDepthValue(20000)
         self.view.addItem(self.earth_axis_item)
-
-        marker_r = self.earth_radius * 0.05
-        m_verts, m_faces, _ = make_uv_sphere(marker_r, n_lon=36, n_lat=18)
-        m_md = gl.MeshData(vertexes=m_verts, faces=m_faces)
-        self.loc_marker = gl.GLMeshItem(meshdata=m_md, smooth=True, drawEdges=False, shader="shaded")
-        self.loc_marker.setColor(ORANGE)
-        self.loc_marker.setGLOptions("translucent")
-        self.loc_marker.setDepthValue(20000)
-        self.view.addItem(self.loc_marker)
 
     def on_now(self):
         self.dt_local = datetime.now(APP_TZ)
@@ -522,39 +545,55 @@ class MainWindow(QtWidgets.QWidget):
         self.update_scene()
 
     def update_scene(self):
-        Ruser = rotation_matrix_from_euler(self.roll, self.pitch, self.yaw).astype(np.float32)
-
-        p = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
-        p_view = apply_R(p.reshape(1, 3), Ruser)[0]
-        self.loc_marker.resetTransform()
-        self.loc_marker.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
-        self.loc_dot.setData(pos=apply_R(p.reshape(1, 3), Ruser))
-
-        horizon_ecef = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
-        self.horizon_item.setData(pos=apply_R(horizon_ecef, Ruser))
-
         dt_utc_naive = self.dt_utc.replace(tzinfo=None)
+
         jd = julian_day(dt_utc_naive)
         gmst = gmst_degrees(dt_utc_naive)
         lst = (gmst + self.lon) % 360.0
 
-        M = equatorial_to_local_enu_matrix(self.lat, lst)     # eq to ENU
-        X = (Ruser @ M).astype(np.float32)                    # eq to view
+        # Earth rotates in inertial frame by GMST
+        Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
 
+        # Earth fixed geometry, rotate by Rearth into view
+        p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
+        p_view = (Rearth @ p_ecef).astype(np.float32)
+
+        self.loc_marker.resetTransform()
+        self.loc_marker.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
+
+        horizon_ecef = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
+        horizon_view = (Rearth @ horizon_ecef.T).T.astype(np.float32)
+        self.horizon_item.setData(pos=horizon_view)
+
+        axis_ecef = np.array([[0.0, 0.0, -self.radius],
+                              [0.0, 0.0,  self.radius]], dtype=np.float32)
+        axis_view = (Rearth @ axis_ecef.T).T.astype(np.float32)
+        self.earth_axis_item.setData(pos=axis_view)
+
+        # Sky transform: equatorial to local ENU using LST
+        M = equatorial_to_local_enu_matrix(self.lat, lst).astype(np.float32)
+
+        # Celestial equator ring (equatorial XY plane) into local ENU
         eq = make_ring(self.radius, 600, "xy")
-        self.eq_item.setData(pos=(X @ eq.T).T.astype(np.float32))
-        self.mw_item.setData(pos=(X @ self.mw_pts_eq.T).T.astype(np.float32))
+        eq_local = (M @ eq.T).T.astype(np.float32)
+        self.eq_item.setData(pos=eq_local)
 
+        # Milky Way points are in equatorial XYZ, convert to local ENU
+        mw_local = (M @ self.mw_pts_eq.T).T.astype(np.float32)
+        self.mw_item.setData(pos=mw_local)
+
+        # Sun in equatorial
         sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
 
-        sun_local = X @ sun_eq
-        sun_pos = (self.radius * sun_local).astype(np.float32)
+        # Sun to local ENU
+        sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
+        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
 
+        sun_pos = (self.radius * sun_local).astype(np.float32)
         self.sun_dot.setData(pos=sun_pos.reshape(1, 3))
 
-        sun_ang_radius_deg = 0.265
-        disk_radius = self.radius * np.sin(np.deg2rad(sun_ang_radius_deg))
+        disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         self.sun_item.setMeshData(meshdata=make_disk_mesh(
             center=sun_pos,
             normal=sun_local.astype(np.float32),
@@ -562,81 +601,65 @@ class MainWindow(QtWidgets.QWidget):
             segments=56
         ))
 
-        alt, az = unit_vector_enu_to_alt_az(sun_local)
+        alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
+        alt_formula, az_formula = alt_az_from_ra_dec(self.lat, lst, sun_ra, sun_dec)
+
+        l_gal, b_gal = sun_galactic_l_b_deg(sun_eq)
 
         self.info.setText(
             f"Lat {self.lat:.4f}  Lon {self.lon:.4f}\n"
             f"Local {self.dt_local.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"UTC {self.dt_utc.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Sun alt {alt:.1f} deg  az {az:.1f} deg"
+            f"Sun alt {alt_vec:.2f} deg  az {az_vec:.2f} deg"
         )
 
         if DEBUG_VERBOSE:
-            # Hour angle diagnostics using standard spherical astronomy
-            HA = wrap180(lst - sun_ra)  # degrees
-            latr = np.deg2rad(self.lat)
-            decr = np.deg2rad(sun_dec)
-            HAr = np.deg2rad(HA)
+            ha = (lst - sun_ra) % 360.0
 
-            sin_alt = np.sin(latr) * np.sin(decr) + np.cos(latr) * np.cos(decr) * np.cos(HAr)
-            alt_from_formula = float(np.rad2deg(np.arcsin(np.clip(sin_alt, -1.0, 1.0))))
+            print("\nDEBUG")
+            print(f"Local time {self.dt_local.strftime('%Y-%m-%d %H:%M:%S')} {APP_TZ.key}")
+            print(f"UTC time   {self.dt_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            print(f"Lat deg   {self.lat: .6f}")
+            print(f"Lon deg   {self.lon: .6f}")
+            print(f"JD        {jd: .12f}")
+            print(f"GMST deg  {gmst: .6f}")
+            print(f"LST deg   {lst: .6f}")
+            print(f"EARTH_ROT_SIGN {EARTH_ROT_SIGN: .1f}")
+            print(f"Rearth = Rz({EARTH_ROT_SIGN * gmst: .6f})")
 
-            cos_az = (np.sin(decr) - np.sin(latr) * np.sin(np.deg2rad(alt_from_formula))) / (np.cos(latr) * np.cos(np.deg2rad(alt_from_formula)) + 1e-12)
-            cos_az = float(np.clip(cos_az, -1.0, 1.0))
-            az_from_formula = float(np.rad2deg(np.arccos(cos_az)))
-            if np.sin(HAr) > 0:
-                az_from_formula = 360.0 - az_from_formula
+            print(f"\nSun RA deg  {sun_ra: .6f}")
+            print(f"Sun Dec deg {sun_dec: .6f}")
+            print(f"Hour angle deg {ha: .6f}")
 
-            # Sun galactic latitude from the vector
-            R_eq2gal = eq_to_gal_matrix_j2000()
-            sun_gal = (R_eq2gal @ sun_eq).astype(np.float32)
-            sun_gal = sun_gal / np.linalg.norm(sun_gal)
-            b_deg = float(np.rad2deg(np.arcsin(np.clip(float(sun_gal[2]), -1.0, 1.0))))
-            l_deg = float(np.rad2deg(np.arctan2(float(sun_gal[1]), float(sun_gal[0])))) % 360.0
+            print(f"\nsun_eq unit {vstr(sun_eq)}")
+            print(f"sun_local unit {vstr(sun_local)}")
+            print(f"norm sun_eq    {np.linalg.norm(sun_eq): .9f}")
+            print(f"norm sun_local {np.linalg.norm(sun_local): .9f}")
 
-            # How far from galactic plane in degrees
-            off_plane_deg = abs(b_deg)
+            print("\nM eq to ENU", mstr(M))
+            print(f"det M {det3(M): .9f}")
+            rn = row_norms(M)
+            dr = dot_rows(M)
+            print(f"row norms M {rn}")
+            print(f"dot rows M {dr[0]: .9e} {dr[1]: .9e} {dr[2]: .9e}")
 
-            print("")
-            print("DEBUG")
-            print("Local time", self.dt_local.strftime("%Y-%m-%d %H:%M:%S"), str(APP_TZ))
-            print("UTC time  ", self.dt_utc.strftime("%Y-%m-%d %H:%M:%S"), "UTC")
-            print(f"Lat deg   {self.lat:.6f}")
-            print(f"Lon deg   {self.lon:.6f}")
-            print(f"JD        {jd:.9f}")
-            print(f"GMST deg  {gmst:.6f}")
-            print(f"LST deg   {lst:.6f}")
-            print("")
-            print(f"Sun RA deg  {sun_ra:.6f}")
-            print(f"Sun Dec deg {sun_dec:.6f}")
-            print(f"Hour angle deg {HA:.6f}")
-            print("")
-            print("sun_eq unit", vstr(sun_eq))
-            print("sun_local unit", vstr(sun_local))
-            print(f"norm sun_eq    {np.linalg.norm(sun_eq):.9f}")
-            print(f"norm sun_local {np.linalg.norm(sun_local):.9f}")
-            print("")
-            print("M eq to ENU", mstr(M))
-            print(f"det M {np.linalg.det(M):.9f}")
-            print("row norms M", [float(np.linalg.norm(M[i])) for i in range(3)])
-            print("dot rows M", float(np.dot(M[0], M[1])), float(np.dot(M[0], M[2])), float(np.dot(M[1], M[2])))
-            print("")
-            print("X eq to view", mstr(X))
-            print(f"det X {np.linalg.det(X):.9f}")
-            print("")
-            print(f"Alt deg from vector  {alt:.6f}")
-            print(f"Az deg from vector   {az:.6f}")
-            print(f"Alt deg from formula {alt_from_formula:.6f}")
-            print(f"Az deg from formula  {az_from_formula:.6f}")
-            print("")
-            print(f"Sun galactic l deg {l_deg:.6f}")
-            print(f"Sun galactic b deg {b_deg:.6f}")
-            print(f"Sun absolute off plane deg {off_plane_deg:.6f}")
-            print("")
-            print("Observer ECEF model", vstr(p))
-            print("Observer view  model", vstr(p_view))
+            print(f"\nAlt deg from vector  {alt_vec: .6f}")
+            print(f"Az deg from vector   {az_vec: .6f}")
+            print(f"Alt deg from formula {alt_formula: .6f}")
+            print(f"Az deg from formula  {az_formula: .6f}")
+
+            print(f"\nSun galactic l deg {l_gal: .6f}")
+            print(f"Sun galactic b deg {b_gal: .6f}")
+            print(f"Sun absolute off plane deg {abs(b_gal): .6f}")
+
+            print(f"\nObserver ECEF model {vstr(p_ecef)}")
+            print(f"Observer view  model {vstr(p_view)}")
             print("END DEBUG")
-            print("")
+
+        # Important rule you requested
+        # Mouse movement does not trigger any recompute
+        # Only Apply, Now, and startup call update_scene
+
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
