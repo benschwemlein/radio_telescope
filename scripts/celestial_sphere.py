@@ -7,7 +7,7 @@ import numpy as np
 import requests
 from PIL import Image
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtCore
 import pyqtgraph.opengl as gl
 
 
@@ -28,10 +28,53 @@ SUN_ANG_RADIUS_DEG = 0.265
 
 
 class FixedGLViewWidget(gl.GLViewWidget):
-    # Mouse rotates camera (whole scene) only
-    # Disable zoom via wheel or trackpad scroll
+    """
+    Mouse rotates camera only.
+    No zoom, no pan, no changing center.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Lock orbit center at origin
+        try:
+            from PyQt6.QtGui import QVector3D
+            self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
+        except Exception:
+            pass
+
     def wheelEvent(self, ev):
+        ev.ignore()  # disable zoom
+
+    def keyPressEvent(self, ev):
+        ev.ignore()  # disable keyboard camera moves
+
+    def keyReleaseEvent(self, ev):
         ev.ignore()
+
+    def mouseMoveEvent(self, ev):
+        # Only allow left drag orbit rotation. Ignore right or middle drag panning.
+        btns = ev.buttons()
+        if btns & QtCore.Qt.MouseButton.RightButton:
+            ev.ignore()
+            return
+        if btns & QtCore.Qt.MouseButton.MiddleButton:
+            ev.ignore()
+            return
+
+        # Force center back to origin so it never drifts.
+        try:
+            from PyQt6.QtGui import QVector3D
+            self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
+        except Exception:
+            pass
+
+        super().mouseMoveEvent(ev)
+
+        try:
+            from PyQt6.QtGui import QVector3D
+            self.opts["center"] = QVector3D(0.0, 0.0, 0.0)
+        except Exception:
+            pass
 
     def set_fixed_distance(self, d: float):
         self.opts["distance"] = float(d)
@@ -475,12 +518,12 @@ class MainWindow(QtWidgets.QWidget):
         self.horizon_item = gl.GLLinePlotItem(pos=hz0, width=2.5, antialias=True, color=ORANGE)
         self.view.addItem(self.horizon_item)
 
-        # Celestial equator
+        # Celestial equator (equatorial XY plane)
         eq = make_ring(self.radius, 600, "xy")
         self.eq_item = gl.GLLinePlotItem(pos=eq, width=1.4, antialias=True, color=WHITE)
         self.view.addItem(self.eq_item)
 
-        # Milky Way band, real galactic plane projected into equatorial coordinates
+        # Milky Way band in equatorial coordinates
         mw_pts, mw_a = build_milky_way_band_equatorial(self.radius, half_width_deg=10.0, n=1600, m=33, seed=7)
         self.mw_pts_eq = mw_pts
         cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
@@ -488,7 +531,7 @@ class MainWindow(QtWidgets.QWidget):
         self.mw_item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=cols, pxMode=True)
         self.view.addItem(self.mw_item)
 
-        # Sun disk and dot
+        # Sun disk and dot (positions will be updated)
         disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         md = make_disk_mesh(
             center=np.array([self.radius, 0.0, 0.0], dtype=np.float32),
@@ -512,7 +555,7 @@ class MainWindow(QtWidgets.QWidget):
         self.sun_dot.setDepthValue(30000)
         self.view.addItem(self.sun_dot)
 
-        # Earth rotation axis line, drawn on top
+        # Earth rotation axis line
         axis_pts = np.array([[0.0, 0.0, -self.radius],
                              [0.0, 0.0,  self.radius]], dtype=np.float32)
         self.earth_axis_item = gl.GLLinePlotItem(pos=axis_pts, width=4.5, antialias=True, color=GOLD)
@@ -554,7 +597,7 @@ class MainWindow(QtWidgets.QWidget):
         # Earth rotates in inertial frame by GMST
         Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
 
-        # Earth fixed geometry, rotate by Rearth into view
+        # Earth fixed geometry, rotate by Rearth into inertial view
         p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
         p_view = (Rearth @ p_ecef).astype(np.float32)
 
@@ -570,36 +613,30 @@ class MainWindow(QtWidgets.QWidget):
         axis_view = (Rearth @ axis_ecef.T).T.astype(np.float32)
         self.earth_axis_item.setData(pos=axis_view)
 
-        # Sky transform: equatorial to local ENU using LST
-        M = equatorial_to_local_enu_matrix(self.lat, lst).astype(np.float32)
+        # Sky items are rendered in equatorial inertial coordinates
+        # (same frame the horizon ring ends up in after rotating ECEF by GMST)
+        self.eq_item.setData(pos=make_ring(self.radius, 600, "xy"))
+        self.mw_item.setData(pos=self.mw_pts_eq)
 
-        # Celestial equator ring (equatorial XY plane) into local ENU
-        eq = make_ring(self.radius, 600, "xy")
-        eq_local = (M @ eq.T).T.astype(np.float32)
-        self.eq_item.setData(pos=eq_local)
-
-        # Milky Way points are in equatorial XYZ, convert to local ENU
-        mw_local = (M @ self.mw_pts_eq.T).T.astype(np.float32)
-        self.mw_item.setData(pos=mw_local)
-
-        # Sun in equatorial
+        # Sun in equatorial inertial coordinates
         sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
 
-        # Sun to local ENU
-        sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
-        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
-
-        sun_pos = (self.radius * sun_local).astype(np.float32)
-        self.sun_dot.setData(pos=sun_pos.reshape(1, 3))
+        sun_pos_eq = (self.radius * sun_eq).astype(np.float32)
+        self.sun_dot.setData(pos=sun_pos_eq.reshape(1, 3))
 
         disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
         self.sun_item.setMeshData(meshdata=make_disk_mesh(
-            center=sun_pos,
-            normal=sun_local.astype(np.float32),
+            center=sun_pos_eq,
+            normal=sun_eq.astype(np.float32),
             radius=disk_radius,
             segments=56
         ))
+
+        # Compute local alt and az for display using ENU transform
+        M = equatorial_to_local_enu_matrix(self.lat, lst).astype(np.float32)
+        sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
+        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
 
         alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
         alt_formula, az_formula = alt_az_from_ra_dec(self.lat, lst, sun_ra, sun_dec)
@@ -656,8 +693,7 @@ class MainWindow(QtWidgets.QWidget):
             print(f"Observer view  model {vstr(p_view)}")
             print("END DEBUG")
 
-        # Important rule you requested
-        # Mouse movement does not trigger any recompute
+        # Mouse movement does not trigger recompute
         # Only Apply, Now, and startup call update_scene
 
 
