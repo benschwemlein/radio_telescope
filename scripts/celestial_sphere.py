@@ -180,17 +180,18 @@ def make_ring(radius: float, n: int, plane="xy") -> np.ndarray:
 def eq_to_gal_matrix_j2000() -> np.ndarray:
     """
     IAU J2000 Equatorial to Galactic rotation.
-    This is the matrix with the widely published coefficients.
+    Verified with galactic center at RA=266.4051, Dec=-28.936175 
+    transforming to l≈0, b≈0
     """
     return np.array([
         [-0.0548755604, -0.8734370902, -0.4838350155],
-        [ 0.4941094279, -0.4448296300,  0.7469822445],
-        [-0.8676661490, -0.1980763734,  0.4559837762],
+        [+0.4941094279, -0.4448296300, +0.7469822445],
+        [-0.8676661490, -0.1980763734, +0.4559837762],
     ], dtype=np.float32)
 
 def gal_to_eq_matrix_j2000() -> np.ndarray:
     """
-    Galactic to Equatorial is the inverse (transpose) of the orthonormal rotation.
+    Galactic to Equatorial (transpose of eq_to_gal for orthonormal matrix).
     """
     return eq_to_gal_matrix_j2000().T.astype(np.float32)
 
