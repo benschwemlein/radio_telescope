@@ -756,8 +756,48 @@ class MainWindow(QtWidgets.QWidget):
 
             print("END DEBUG")
 
+            print(sun_debug_lines(self.lat, self.lon, self.dt_local))
+
         # Mouse movement does not trigger any recompute
         # Only Apply, Now, and startup call update_scene
+
+def sun_debug_lines(lat_deg: float, lon_deg: float, dt_local: datetime) -> str:
+    dt_utc = dt_local.astimezone(timezone.utc)
+    dt_utc_naive = dt_utc.replace(tzinfo=None)
+
+    jd = julian_day(dt_utc_naive)
+    gmst = gmst_degrees(dt_utc_naive)
+    lst = (gmst + lon_deg) % 360.0
+
+    sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
+    M = equatorial_to_local_enu_matrix(lat_deg, lst).astype(np.float32)
+
+    sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
+    sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
+    sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
+
+    alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
+    alt_formula, az_formula = alt_az_from_ra_dec(lat_deg, lst, sun_ra, sun_dec)
+    ha = (lst - sun_ra) % 360.0
+
+    max_alt_theory = 90.0 - abs(lat_deg - sun_dec)
+
+    lines = []
+    lines.append("SUN DEBUG")
+    lines.append(f"Local {dt_local.strftime('%Y-%m-%d %H:%M:%S')} {APP_TZ.key}")
+    lines.append(f"UTC   {dt_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    lines.append(f"Lat {lat_deg:.6f}  Lon {lon_deg:.6f}")
+    lines.append(f"JD {jd:.12f}")
+    lines.append(f"GMST {gmst:.6f} deg  LST {lst:.6f} deg")
+    lines.append(f"Sun RA {sun_ra:.6f} deg  Dec {sun_dec:.6f} deg  HA {ha:.6f} deg")
+    lines.append(f"Alt from vector  {alt_vec:.6f} deg   Az from vector  {az_vec:.6f} deg")
+    lines.append(f"Alt from formula {alt_formula:.6f} deg   Az from formula {az_formula:.6f} deg")
+    lines.append(f"Theory max alt (transit)  {max_alt_theory:.6f} deg")
+    lines.append(
+        f"Diff (vec-formula) alt {alt_vec-alt_formula:+.9f} deg  az {((az_vec-az_formula+540)%360-180):+.9f} deg"
+    )
+    lines.append("END SUN DEBUG")
+    return "\n".join(lines)
 
 
 def main():
