@@ -162,14 +162,13 @@ class MainWindow(QtWidgets.QWidget):
     
     def _build_ground_plane(self):
         """Create a large green ground plane for ground view"""
-        size = 5.0
-        y_offset = -0.001
+        size = 10.0
         
         verts = np.array([
-            [-size, -size, y_offset],
-            [ size, -size, y_offset],
-            [ size,  size, y_offset],
-            [-size,  size, y_offset],
+            [-size, -size, 0.0],
+            [ size, -size, 0.0],
+            [ size,  size, 0.0],
+            [-size,  size, 0.0],
         ], dtype=np.float32)
         
         faces = np.array([
@@ -194,9 +193,9 @@ class MainWindow(QtWidgets.QWidget):
         self.compass_markers = {}
         
         for direction in ['N', 'S', 'E', 'W']:
-            marker_size = 0.015
+            marker_size = 0.02
             from geometry.mesh_generation import make_uv_sphere
-            verts, faces, _ = make_uv_sphere(marker_size, n_lon=12, n_lat=6)
+            verts, faces, _ = make_uv_sphere(marker_size, n_lon=16, n_lat=8)
             md = gl.MeshData(vertexes=verts, faces=faces)
             marker = gl.GLMeshItem(meshdata=md, smooth=True, drawEdges=False, shader="shaded")
             
@@ -208,6 +207,7 @@ class MainWindow(QtWidgets.QWidget):
             }
             marker.setColor(colors[direction])
             marker.setGLOptions("translucent")
+            marker.setDepthValue(40000)
             marker.setVisible(False)
             self.view.addItem(marker)
             self.compass_markers[direction] = marker
@@ -217,15 +217,15 @@ class MainWindow(QtWidgets.QWidget):
         east, north, up = ecef_basis_at(self.lat, self.lon)
         east_view = (Rearth @ east).astype(np.float32)
         north_view = (Rearth @ north).astype(np.float32)
-        up_view = (Rearth @ up).astype(np.float32)
         
-        horizon_dist = 0.8
+        # Place markers on the celestial sphere at horizon level
+        horizon_dist = self.radius * 0.99
         
         positions = {
-            'N': p_view + horizon_dist * north_view,
-            'S': p_view - horizon_dist * north_view,
-            'E': p_view + horizon_dist * east_view,
-            'W': p_view - horizon_dist * east_view,
+            'N': horizon_dist * north_view,
+            'S': -horizon_dist * north_view,
+            'E': horizon_dist * east_view,
+            'W': -horizon_dist * east_view,
         }
         
         for direction, pos in positions.items():
@@ -280,6 +280,9 @@ class MainWindow(QtWidgets.QWidget):
             self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
         self.update_scene()
+        # If in ground view, refresh the view
+        if self.current_view_mode == "ground":
+            self.on_ground_view()
     
     def on_zoom_changed(self, value):
         """Handle zoom slider changes"""
@@ -319,16 +322,30 @@ class MainWindow(QtWidgets.QWidget):
         # Update compass positions
         self._update_compass_positions(p_view, Rearth)
         
-        # Position ground plane
+        # Position and orient ground plane
         self.ground_plane.resetTransform()
+        # First translate to observer position
         self.ground_plane.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
         
+        # Rotate ground plane to be horizontal in local frame
+        # We need to align the ground plane's normal with the local "up" direction
+        z_axis = np.array([0, 0, 1], dtype=np.float32)
+        # Calculate rotation to align z-axis with up_view
+        rotation_axis = np.cross(z_axis, up_view)
+        rotation_axis_norm = np.linalg.norm(rotation_axis)
+        if rotation_axis_norm > 1e-6:
+            rotation_axis = rotation_axis / rotation_axis_norm
+            angle = np.arccos(np.clip(np.dot(z_axis, up_view), -1.0, 1.0))
+            angle_deg = np.rad2deg(angle)
+            self.ground_plane.rotate(angle_deg, rotation_axis[0], rotation_axis[1], rotation_axis[2])
+        
+        # Camera setup - place camera at observer position
         cam_pos = p_view
-        look_dir = -north_view
+        look_dir = -north_view  # Look south
         look_dir = look_dir / (np.linalg.norm(look_dir) + 1e-12)
         
         self.view.opts['center'] = QtGui.QVector3D(float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2]))
-        self.view.opts['distance'] = 0.01
+        self.view.opts['distance'] = 0.001
         self.view.opts['fov'] = self.ground_fov
         
         azimuth = np.rad2deg(np.arctan2(look_dir[1], look_dir[0]))
@@ -404,11 +421,9 @@ class MainWindow(QtWidgets.QWidget):
         gc_pos = (self.radius * gc_eq).astype(np.float32)
         self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
         
-        # Update ground view elements if active
+        # Update ground view elements if active (do this after scene update)
         if self.current_view_mode == "ground":
             self._update_compass_positions(p_view, Rearth)
-            self.ground_plane.resetTransform()
-            self.ground_plane.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
         
         # Debug output
         if DEBUG_ENABLED:
