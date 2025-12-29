@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import numpy as np
 from PyQt6 import QtWidgets, QtGui
+from PyQt6.QtCore import Qt
 
 from visualization.gl_widgets import FixedGLViewWidget
 from visualization.scene_builder import SceneBuilder
@@ -21,6 +22,7 @@ from astronomy.celestial_objects import sun_ra_dec_degrees, galactic_center_unit
 from astronomy.galactic import build_milky_way_band_equatorial
 from geometry.transformations import rotz_deg
 from geometry.mesh_generation import make_ring, make_disk_mesh
+import pyqtgraph.opengl as gl
 
 APP_TZ = ZoneInfo("America/New_York")
 DEBUG_VERBOSE = True
@@ -38,6 +40,7 @@ class MainWindow(QtWidgets.QWidget):
         self.lon = -82.9988
         self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
+        self.ground_fov = 90.0  # Field of view in degrees for ground view
         self._build_ui()
         self._build_scene()
         self.update_scene()
@@ -74,6 +77,24 @@ class MainWindow(QtWidgets.QWidget):
         view_row.addWidget(self.ground_view_btn)
         left.addLayout(view_row)
         
+        # Add zoom slider for ground view
+        zoom_label = QtWidgets.QLabel("Ground View Zoom (FOV)")
+        left.addWidget(zoom_label)
+        
+        zoom_layout = QtWidgets.QHBoxLayout()
+        self.zoom_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setMinimum(10)  # 10 degrees (zoomed in)
+        self.zoom_slider.setMaximum(120)  # 120 degrees (zoomed out)
+        self.zoom_slider.setValue(90)  # Default 90 degrees
+        self.zoom_slider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
+        self.zoom_slider.setTickInterval(10)
+        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
+        
+        self.zoom_value_label = QtWidgets.QLabel(f"{self.zoom_slider.value()}°")
+        zoom_layout.addWidget(self.zoom_slider)
+        zoom_layout.addWidget(self.zoom_value_label)
+        left.addLayout(zoom_layout)
+        
         self.info = QtWidgets.QLabel("")
         self.info.setWordWrap(True)
         left.addWidget(self.info)
@@ -88,6 +109,9 @@ class MainWindow(QtWidgets.QWidget):
         self.now_btn.clicked.connect(self.on_now)
         self.sphere_view_btn.clicked.connect(self.on_sphere_view)
         self.ground_view_btn.clicked.connect(self.on_ground_view)
+        
+        # Track current view mode
+        self.current_view_mode = "sphere"
     
     def _build_scene(self):
         """Build 3D scene objects"""
@@ -128,21 +152,59 @@ class MainWindow(QtWidgets.QWidget):
         # Galactic center
         self.gc_dot = self.scene_builder.build_galactic_center_dot()
         self.view.addItem(self.gc_dot)
+        
+        # Ground plane (green, large and flat)
+        self._build_ground_plane()
+    
+    def _build_ground_plane(self):
+        """Create a large green ground plane for ground view"""
+        # Create a large horizontal plane
+        size = 5.0  # Large plane
+        y_offset = -0.001  # Slightly below horizon to appear as ground
+        
+        # Create vertices for a square ground plane
+        verts = np.array([
+            [-size, -size, y_offset],
+            [ size, -size, y_offset],
+            [ size,  size, y_offset],
+            [-size,  size, y_offset],
+        ], dtype=np.float32)
+        
+        # Create faces (two triangles)
+        faces = np.array([
+            [0, 1, 2],
+            [0, 2, 3],
+        ], dtype=np.int32)
+        
+        # Create mesh
+        ground_md = gl.MeshData(vertexes=verts, faces=faces)
+        self.ground_plane = gl.GLMeshItem(
+            meshdata=ground_md,
+            smooth=False,
+            drawEdges=False,
+            shader="shaded"
+        )
+        self.ground_plane.setColor((0.2, 0.5, 0.2, 1.0))  # Green color
+        self.ground_plane.setGLOptions("opaque")
+        self.ground_plane.setVisible(False)  # Hidden by default
+        self.view.addItem(self.ground_plane)
     
     def _set_object_visibility(self, sphere_mode=True):
         """Set visibility of objects based on view mode"""
         if sphere_mode:
-            # Sphere view: show everything
+            # Sphere view: show everything except ground plane
             self.sky_item.setVisible(True)
             self.earth_item.setVisible(True)
             self.loc_marker.setVisible(True)
             self.earth_axis_item.setVisible(True)
+            self.ground_plane.setVisible(False)
         else:
-            # Ground view: hide Earth and location marker, show only sky
+            # Ground view: hide Earth and location marker, show ground plane
             self.sky_item.setVisible(True)
             self.earth_item.setVisible(False)
             self.loc_marker.setVisible(False)
             self.earth_axis_item.setVisible(False)
+            self.ground_plane.setVisible(True)
     
     def on_now(self):
         """Set time to current"""
@@ -168,8 +230,18 @@ class MainWindow(QtWidgets.QWidget):
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
         self.update_scene()
     
+    def on_zoom_changed(self, value):
+        """Handle zoom slider changes"""
+        self.ground_fov = float(value)
+        self.zoom_value_label.setText(f"{value}°")
+        # If we're in ground view, update the view
+        if self.current_view_mode == "ground":
+            self.on_ground_view()
+    
     def on_sphere_view(self):
         """Set camera to sphere view (external view of celestial sphere)"""
+        self.current_view_mode = "sphere"
+        
         # Show all objects
         self._set_object_visibility(sphere_mode=True)
         
@@ -178,10 +250,13 @@ class MainWindow(QtWidgets.QWidget):
         self.view.opts['elevation'] = 30  # Look down at 30 degrees
         self.view.opts['azimuth'] = 45    # Rotate 45 degrees
         self.view.opts['distance'] = 2.6
+        self.view.opts['fov'] = 60  # Default FOV
         self.view.update()
     
     def on_ground_view(self):
         """Set camera to ground view (observer on Earth looking south at horizon)"""
+        self.current_view_mode = "ground"
+        
         # Hide Earth and location marker for ground view
         self._set_object_visibility(sphere_mode=False)
         
@@ -200,23 +275,26 @@ class MainWindow(QtWidgets.QWidget):
         north_view = (Rearth @ north).astype(np.float32)
         up_view = (Rearth @ up).astype(np.float32)
         
-        # Camera position: at the surface (origin, since we're at the "center" of our local view)
+        # Position ground plane at observer location, oriented horizontally
+        self.ground_plane.resetTransform()
+        # First translate to observer position
+        self.ground_plane.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
+        
+        # Camera position: at the surface
         cam_pos = p_view
         
         # Look direction: south along horizon (negative north)
-        # Normalize to ensure we're looking exactly at the horizon
         look_dir = -north_view
         look_dir = look_dir / (np.linalg.norm(look_dir) + 1e-12)
-        
-        # Target point: far in the distance toward south
-        target = cam_pos + 10.0 * look_dir
         
         # Set camera - position it at observer location
         self.view.opts['center'] = QtGui.QVector3D(float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2]))
         self.view.opts['distance'] = 0.01  # Very close to "being" at that point
         
+        # Set FOV based on slider
+        self.view.opts['fov'] = self.ground_fov
+        
         # Calculate azimuth and elevation for camera orientation
-        # We want to look horizontally (elevation ≈ 0) toward south
         azimuth = np.rad2deg(np.arctan2(look_dir[1], look_dir[0]))
         
         self.view.opts['azimuth'] = float(azimuth)
@@ -293,6 +371,16 @@ class MainWindow(QtWidgets.QWidget):
         gc_eq = galactic_center_unit_eq()
         gc_pos = (self.radius * gc_eq).astype(np.float32)
         self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
+        
+        # Update ground plane position if in ground view
+        if self.current_view_mode == "ground":
+            east, north, up = ecef_basis_at(self.lat, self.lon)
+            east_view = (Rearth @ east).astype(np.float32)
+            north_view = (Rearth @ north).astype(np.float32)
+            up_view = (Rearth @ up).astype(np.float32)
+            
+            self.ground_plane.resetTransform()
+            self.ground_plane.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
         
         if DEBUG_VERBOSE:
             self._print_debug(jd, gmst, lst, sun_ra, sun_dec, sun_eq, 
