@@ -596,6 +596,7 @@ class MainWindow(QtWidgets.QWidget):
         self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
         
         if DEBUG_VERBOSE:
+            debug_milky_way_positions(self.lat, self.lon, self.dt_local, self.mw_pts_eq)
             ha = (lst - sun_ra) % 360.0
             scp = np.array([0.0, 0.0, -1.0], dtype=np.float32)
             ncp = np.array([0.0, 0.0,  1.0], dtype=np.float32)
@@ -683,6 +684,40 @@ def sun_debug_lines(lat_deg: float, lon_deg: float, dt_local: datetime) -> str:
     )
     lines.append("END SUN DEBUG")
     return "\n".join(lines)
+
+def debug_milky_way_positions(lat_deg: float, lon_deg: float, dt_local: datetime, mw_pts_eq: np.ndarray):
+    """Debug: Show altitude/azimuth of various points along the Milky Way band"""
+    dt_utc = dt_local.astimezone(timezone.utc)
+    dt_utc_naive = dt_utc.replace(tzinfo=None)
+    gmst = gmst_degrees(dt_utc_naive)
+    lst = (gmst + lon_deg) % 360.0
+    
+    # Transform matrix
+    M = equatorial_to_local_enu_matrix(lat_deg, lst)
+    
+    # Get galactic coordinates for each Milky Way point
+    E2G = eq_to_gal_matrix_j2000()
+    
+    print("\n=== MILKY WAY BAND POSITIONS ===")
+    
+    # Sample every 200th point to avoid too much output
+    for i in range(0, len(mw_pts_eq), 200):
+        pt_eq = mw_pts_eq[i] / np.linalg.norm(mw_pts_eq[i])
+        
+        # Get galactic coordinates
+        pt_gal = (E2G @ pt_eq.reshape(3, 1)).ravel()
+        pt_gal = pt_gal / np.linalg.norm(pt_gal)
+        l_gal = np.rad2deg(np.arctan2(pt_gal[1], pt_gal[0])) % 360.0
+        b_gal = np.rad2deg(np.arcsin(np.clip(pt_gal[2], -1.0, 1.0)))
+        
+        # Get local alt/az
+        pt_local = (M @ pt_eq.reshape(3, 1)).ravel()
+        pt_local = pt_local / np.linalg.norm(pt_local)
+        alt, az = unit_vector_enu_to_alt_az(pt_local)
+        
+        print(f"Point {i:5d}: gal_l={l_gal:6.1f}° gal_b={b_gal:+5.1f}° → alt={alt:+6.1f}° az={az:6.1f}°")
+    
+    print("=== END MILKY WAY DEBUG ===\n")
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
