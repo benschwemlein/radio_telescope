@@ -190,13 +190,13 @@ def eq_to_gal_matrix_j2000() -> np.ndarray:
 
 def gal_to_eq_matrix_j2000() -> np.ndarray:
     """
-    Galactic to Equatorial is the transpose of the orthonormal rotation.
+    Galactic to Equatorial is the inverse (transpose) of the orthonormal rotation.
     """
     return eq_to_gal_matrix_j2000().T.astype(np.float32)
 
 def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=33, seed=7):
     rng = np.random.default_rng(seed)
-    # Correct direction: Galactic -> Equatorial for drawing the galactic plane on the equatorial sky
+    # Standard IAU galactic coordinates convention
     R_g2e = gal_to_eq_matrix_j2000()
     l = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False).astype(np.float32)
     hw = np.deg2rad(half_width_deg).astype(np.float32)
@@ -206,16 +206,20 @@ def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=3
     for b in b_vals:
         cb = np.cos(b)
         sb = np.sin(b)
-        xg = cb * np.cos(l)
-        yg = cb * np.sin(l)
-        zg = np.full_like(l, sb)
+        # Standard galactic coordinate convention: X toward GC, Y in plane, Z toward north pole
+        cl = np.cos(l)
+        sl = np.sin(l)
+        xg = cb * cl
+        yg = cb * sl
+        zg = sb * np.ones_like(l)
         g = np.stack([xg, yg, zg], axis=1).astype(np.float32)
         noise = rng.normal(0.0, 1.0, size=g.shape).astype(np.float32)
-        noise = noise / np.linalg.norm(noise, axis=1, keepdims=True)
+        noise = noise / (np.linalg.norm(noise, axis=1, keepdims=True) + 1e-12)
         g = g + 0.008 * noise
-        g = g / np.linalg.norm(g, axis=1, keepdims=True)
+        g = g / (np.linalg.norm(g, axis=1, keepdims=True) + 1e-12)
+        # Transform from galactic to equatorial
         e = (R_g2e @ g.T).T.astype(np.float32)
-        e = e / np.linalg.norm(e, axis=1, keepdims=True)
+        e = e / (np.linalg.norm(e, axis=1, keepdims=True) + 1e-12)
         e = radius * e
         edge = abs(float(b) / float(hw)) if float(hw) > 0.0 else 0.0
         a = (1.0 - edge) ** 1.8
@@ -317,6 +321,17 @@ def sun_galactic_l_b_deg(sun_eq_unit: np.ndarray) -> tuple[float, float]:
     x, y, z = float(g[0]), float(g[1]), float(g[2])
     b = np.rad2deg(np.arcsin(np.clip(z, -1.0, 1.0)))
     l = np.rad2deg(np.arctan2(y, x)) % 360.0
+    
+    # Debug: verify transformation
+    if DEBUG_VERBOSE:
+        # The galactic center should be at l=0, b=0 in galactic coords
+        gc_eq = gc_unit_eq()
+        gc_gal = (E2G @ gc_eq.reshape(3, 1)).ravel()
+        gc_gal = gc_gal / (np.linalg.norm(gc_gal) + 1e-12)
+        gc_l = np.rad2deg(np.arctan2(gc_gal[1], gc_gal[0])) % 360.0
+        gc_b = np.rad2deg(np.arcsin(np.clip(gc_gal[2], -1.0, 1.0)))
+        print(f"  GC in galactic coords: l={gc_l:.4f} deg, b={gc_b:.4f} deg (should be ~0, ~0)")
+    
     return float(l), float(b)
 
 def gc_unit_eq() -> np.ndarray:
@@ -513,7 +528,7 @@ class MainWindow(QtWidgets.QWidget):
         # EARTH FRAME: Rotates with Earth (by GMST)
         # ============================================
         Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
-
+        
         # Rotate Earth mesh to align texture with GMST
         self.earth_item.resetTransform()
         self.earth_item.rotate(EARTH_ROT_SIGN * gmst, 0, 0, 1)
