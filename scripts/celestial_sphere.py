@@ -513,6 +513,10 @@ class MainWindow(QtWidgets.QWidget):
         # EARTH FRAME: Rotates with Earth (by GMST)
         # ============================================
         Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
+
+        # Rotate Earth mesh to align texture with GMST
+        self.earth_item.resetTransform()
+        self.earth_item.rotate(EARTH_ROT_SIGN * gmst, 0, 0, 1)
         
         # Location marker on Earth surface
         p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
