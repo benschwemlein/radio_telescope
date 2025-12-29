@@ -2,7 +2,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 import numpy as np
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtGui
 
 from visualization.gl_widgets import FixedGLViewWidget
 from visualization.scene_builder import SceneBuilder
@@ -14,7 +14,8 @@ from astronomy.coordinates import (
     alt_az_from_ra_dec,
     latlon_to_ecef,
     make_horizon_ring_ecef,
-    eq_to_gal_matrix_j2000
+    eq_to_gal_matrix_j2000,
+    ecef_basis_at
 )
 from astronomy.celestial_objects import sun_ra_dec_degrees, galactic_center_unit_eq
 from astronomy.galactic import build_milky_way_band_equatorial
@@ -65,6 +66,14 @@ class MainWindow(QtWidgets.QWidget):
         btn_row.addWidget(self.now_btn)
         left.addLayout(btn_row)
         
+        # Add view mode buttons
+        view_row = QtWidgets.QHBoxLayout()
+        self.sphere_view_btn = QtWidgets.QPushButton("Sphere View")
+        self.ground_view_btn = QtWidgets.QPushButton("Ground View")
+        view_row.addWidget(self.sphere_view_btn)
+        view_row.addWidget(self.ground_view_btn)
+        left.addLayout(view_row)
+        
         self.info = QtWidgets.QLabel("")
         self.info.setWordWrap(True)
         left.addWidget(self.info)
@@ -77,6 +86,8 @@ class MainWindow(QtWidgets.QWidget):
         
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
+        self.sphere_view_btn.clicked.connect(self.on_sphere_view)
+        self.ground_view_btn.clicked.connect(self.on_ground_view)
     
     def _build_scene(self):
         """Build 3D scene objects"""
@@ -141,6 +152,53 @@ class MainWindow(QtWidgets.QWidget):
             self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
         self.update_scene()
+    
+    def on_sphere_view(self):
+        """Set camera to sphere view (external view of celestial sphere)"""
+        # Reset camera to default external view
+        self.view.opts['center'] = QtGui.QVector3D(0, 0, 0)
+        self.view.opts['elevation'] = 30  # Look down at 30 degrees
+        self.view.opts['azimuth'] = 45    # Rotate 45 degrees
+        self.view.opts['distance'] = 2.6
+        self.view.update()
+    
+    def on_ground_view(self):
+        """Set camera to ground view (observer on Earth looking south at horizon)"""
+        # Calculate observer position on Earth surface
+        p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
+        dt_utc_naive = self.dt_utc.replace(tzinfo=None)
+        gmst = gmst_degrees(dt_utc_naive)
+        Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
+        p_view = (Rearth @ p_ecef).astype(np.float32)
+        
+        # Get local coordinate basis (east, north, up)
+        east, north, up = ecef_basis_at(self.lat, self.lon)
+        
+        # Transform basis vectors to current view frame
+        east_view = (Rearth @ east).astype(np.float32)
+        north_view = (Rearth @ north).astype(np.float32)
+        up_view = (Rearth @ up).astype(np.float32)
+        
+        # Camera position: slightly above surface
+        cam_pos = p_view + 0.02 * up_view
+        
+        # Look direction: south along horizon (negative north, no up component)
+        look_dir = -north_view
+        
+        # Target point: where we're looking
+        target = cam_pos + 0.5 * look_dir
+        
+        # Set camera
+        self.view.opts['center'] = QtGui.QVector3D(target[0], target[1], target[2])
+        self.view.opts['distance'] = 0.5
+        
+        # Calculate azimuth and elevation for camera orientation
+        azimuth = np.rad2deg(np.arctan2(look_dir[1], look_dir[0]))
+        elevation = np.rad2deg(np.arcsin(look_dir[2] / (np.linalg.norm(look_dir) + 1e-12)))
+        
+        self.view.opts['azimuth'] = float(azimuth)
+        self.view.opts['elevation'] = float(elevation)
+        self.view.update()
     
     def update_scene(self):
         """Update scene for current time and location"""
@@ -231,49 +289,4 @@ class MainWindow(QtWidgets.QWidget):
         
         # GC sanity checks
         gc_gal = (E2G @ gc_eq.reshape(3, 1)).ravel()
-        gc_gal = gc_gal / (np.linalg.norm(gc_gal) + 1e-12)
-        gc_l = np.rad2deg(np.arctan2(gc_gal[1], gc_gal[0])) % 360.0
-        gc_b = np.rad2deg(np.arcsin(np.clip(gc_gal[2], -1.0, 1.0)))
-        print(f"  GC in galactic coords: l={gc_l:.4f} deg, b={gc_b:.4f} deg (should be ~0, ~0)")
-        
-        scp = np.array([0.0, 0.0, -1.0], dtype=np.float32)
-        ncp = np.array([0.0, 0.0,  1.0], dtype=np.float32)
-        
-        def angular_sep_deg(u, v):
-            u = u / (np.linalg.norm(u) + 1e-12)
-            v = v / (np.linalg.norm(v) + 1e-12)
-            return float(np.rad2deg(np.arccos(np.clip(np.dot(u, v), -1.0, 1.0))))
-        
-        gc_sep_scp = angular_sep_deg(gc_eq, scp)
-        gc_sep_ncp = angular_sep_deg(gc_eq, ncp)
-        gc_local = (M @ gc_eq.reshape(3, 1)).ravel().astype(np.float32)
-        gc_local = gc_local / (np.linalg.norm(gc_local) + 1e-12)
-        gc_alt, gc_az = unit_vector_enu_to_alt_az(gc_local)
-        
-        mw_dirs_eq = self.mw_pts_eq / (self.radius + 1e-12)
-        dots = np.clip(mw_dirs_eq @ (gc_eq / (np.linalg.norm(gc_eq) + 1e-12)), -1.0, 1.0)
-        min_sep = float(np.rad2deg(np.arccos(float(np.max(dots)))))
-        
-        print("\nDEBUG")
-        print(f"Local time {self.dt_local.strftime('%Y-%m-%d %H:%M:%S')} {APP_TZ.key}")
-        print(f"UTC time   {self.dt_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        print(f"Lat deg   {self.lat: .6f}")
-        print(f"Lon deg   {self.lon: .6f}")
-        print(f"JD        {jd: .12f}")
-        print(f"GMST deg  {gmst: .6f}")
-        print(f"LST deg   {lst: .6f}")
-        print(f"Sun RA deg  {sun_ra: .6f}")
-        print(f"Sun Dec deg {sun_dec: .6f}")
-        print(f"Hour angle deg {ha: .6f}")
-        print(f"Alt deg from vector  {alt_vec: .6f}")
-        print(f"Az deg from vector   {az_vec: .6f}")
-        print(f"Alt deg from formula {alt_formula: .6f}")
-        print(f"Az deg from formula  {az_formula: .6f}")
-        print(f"Sun galactic l deg   {l_gal: .6f}")
-        print(f"Sun galactic b deg   {b_gal: .6f}")
-        print("\nGalactic Center sanity checks")
-        print(f"  GC local alt {gc_alt: .6f} deg  az {gc_az: .6f} deg")
-        print(f"  GC angle to south celestial pole {gc_sep_scp: .6f} deg (expected about 61.064)")
-        print(f"  GC angle to north celestial pole {gc_sep_ncp: .6f} deg (expected about 118.936)")
-        print(f"  Min angular sep between GC and Milky Way points {min_sep: .6f} deg (should be small)")
-        print("END DEBUG\n")
+        gc_gal = gc_gal
