@@ -41,18 +41,25 @@ class GroundView:
         """
         self._set_visibility(True)
         Rearth, p_view = self._calculate_observer_position(lat, lon, gmst, earth_rot_sign)
-        self._update_ground_plane(lat, lon, p_view, Rearth)
         self._update_compass_markers(lat, lon, Rearth)
         self._set_camera(lat, lon, p_view, Rearth)
     
     def _set_visibility(self, visible: bool):
         """Set visibility of objects in ground view"""
-        # Show ground view objects
-        self.items['ground_plane'].setVisible(visible)
+        # Show compass markers only
         for marker in self.items['compass_markers'].values():
             marker.setVisible(visible)
+        
+        # Keep sky and celestial objects visible
         self.items['sky'].setVisible(visible)
         self.items['sun_disk'].setVisible(visible)
+        self.items['mw'].setVisible(visible)
+        self.items['eq'].setVisible(visible)
+        self.items['gc_dot'].setVisible(visible)
+        self.items['horizon'].setVisible(visible)  # Show horizon in ground view
+        
+        # Hide ground plane - it interferes with sky view
+        self.items['ground_plane'].setVisible(False)
         
         # Hide globe view objects
         self.items['earth'].setVisible(False)
@@ -137,8 +144,8 @@ class GroundView:
         # Project south direction onto XY plane for azimuth
         azimuth = np.rad2deg(np.arctan2(south_dir[1], south_dir[0]))
         
-        # Elevation should be 0 to look at horizon
-        elevation = 0.0
+        # Elevation set to look slightly up to show more sky, less ground
+        elevation = 10.0  # Look up 10 degrees above horizon
         
         self.view.opts['azimuth'] = float(azimuth)
         self.view.opts['elevation'] = float(elevation)
@@ -147,14 +154,12 @@ class GroundView:
     def set_fov(self, fov_degrees):
         """Set field of view for ground view"""
         self.fov = float(fov_degrees)
-        # Update camera if currently active
-        if self.items['ground_plane'].visible():
-            self.view.opts['fov'] = self.fov
-            self.view.update()
+        # Always update FOV when changed
+        self.view.opts['fov'] = self.fov
+        self.view.update()
     
     def update_for_time_change(self, lat, lon, gmst, earth_rot_sign=1.0):
         """Update ground view when time changes (recalculate positions)"""
         Rearth, p_view = self._calculate_observer_position(lat, lon, gmst, earth_rot_sign)
-        self._update_ground_plane(lat, lon, p_view, Rearth)
         self._update_compass_markers(lat, lon, Rearth)
         self._set_camera(lat, lon, p_view, Rearth)
