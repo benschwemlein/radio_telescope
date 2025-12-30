@@ -13,16 +13,16 @@ from astronomy.coordinates import (
     equatorial_to_local_enu_matrix,
     unit_vector_enu_to_alt_az,
     alt_az_from_ra_dec,
-    latlon_to_ecef,
     make_horizon_ring_ecef,
-    eq_to_gal_matrix_j2000,
-    ecef_basis_at
+    ra_dec_to_unit_vector_equatorial
 )
 from astronomy.celestial_objects import sun_ra_dec_degrees, galactic_center_unit_eq
-from astronomy.galactic import build_milky_way_band_equatorial
-from geometry.transformations import rotz_deg
-from geometry.mesh_generation import make_ring, make_disk_mesh
+from geometry.mesh_generation import make_disk_mesh
 import pyqtgraph.opengl as gl
+
+# Import the new view mode classes
+from .globe_view import GlobeView
+from .ground_view import GroundView
 
 APP_TZ = ZoneInfo("America/New_York")
 EARTH_ROT_SIGN = 1.0
@@ -42,9 +42,15 @@ class MainWindow(QtWidgets.QWidget):
         self.lon = -82.9988
         self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
-        self.ground_fov = 90.0
+        
         self._build_ui()
         self._build_scene()
+        
+        # Initialize view modes
+        self._init_view_modes()
+        
+        # Start with globe view
+        self.current_view_mode = "sphere"
         self.update_scene()
     
     def _build_ui(self):
@@ -111,8 +117,6 @@ class MainWindow(QtWidgets.QWidget):
         self.now_btn.clicked.connect(self.on_now)
         self.sphere_view_btn.clicked.connect(self.on_sphere_view)
         self.ground_view_btn.clicked.connect(self.on_ground_view)
-        
-        self.current_view_mode = "sphere"
     
     def _build_scene(self):
         """Build 3D scene objects"""
@@ -142,8 +146,8 @@ class MainWindow(QtWidgets.QWidget):
         self.view.addItem(self.mw_item)
         
         # Sun
-        self.sun_item, self.sun_dot = self.scene_builder.build_sun()
-        self.view.addItem(self.sun_item)
+        self.sun_disk_item, self.sun_dot = self.scene_builder.build_sun()
+        self.view.addItem(self.sun_disk_item)
         self.view.addItem(self.sun_dot)
         
         # Earth axis
@@ -212,50 +216,39 @@ class MainWindow(QtWidgets.QWidget):
             self.view.addItem(marker)
             self.compass_markers[direction] = marker
     
-    def _update_compass_positions(self, p_view, Rearth):
-        """Update compass marker positions on horizon"""
-        east, north, up = ecef_basis_at(self.lat, self.lon)
-        east_view = (Rearth @ east).astype(np.float32)
-        north_view = (Rearth @ north).astype(np.float32)
-        
-        # Place markers on the celestial sphere at horizon level
-        horizon_dist = self.radius * 0.99
-        
-        positions = {
-            'N': horizon_dist * north_view,
-            'S': -horizon_dist * north_view,
-            'E': horizon_dist * east_view,
-            'W': -horizon_dist * east_view,
+    def _init_view_modes(self):
+        """Initialize view mode controllers"""
+        # Create scene items dictionary for view modes
+        self.scene_items = {
+            'sky': self.sky_item,
+            'earth': self.earth_item,
+            'loc_marker': self.loc_marker,
+            'horizon': self.horizon_item,
+            'eq': self.eq_item,
+            'mw': self.mw_item,
+            'sun_disk': self.sun_disk_item,
+            'sun_dot': self.sun_dot,
+            'earth_axis': self.earth_axis_item,
+            'gc_dot': self.gc_dot,
+            'ground_plane': self.ground_plane,
+            'compass_markers': self.compass_markers
         }
         
-        for direction, pos in positions.items():
-            self.compass_markers[direction].resetTransform()
-            self.compass_markers[direction].translate(float(pos[0]), float(pos[1]), float(pos[2]))
-    
-    def _set_object_visibility(self, sphere_mode=True):
-        """Set visibility of objects based on view mode"""
-        if sphere_mode:
-            # Sphere view
-            self.sky_item.setVisible(True)
-            self.earth_item.setVisible(True)
-            self.loc_marker.setVisible(True)
-            self.earth_axis_item.setVisible(True)
-            self.ground_plane.setVisible(False)
-            for marker in self.compass_markers.values():
-                marker.setVisible(False)
-            self.sun_item.setVisible(True)
-            self.sun_dot.setVisible(True)
-        else:
-            # Ground view
-            self.sky_item.setVisible(True)
-            self.earth_item.setVisible(False)
-            self.loc_marker.setVisible(False)
-            self.earth_axis_item.setVisible(False)
-            self.ground_plane.setVisible(True)
-            for marker in self.compass_markers.values():
-                marker.setVisible(True)
-            self.sun_item.setVisible(True)
-            self.sun_dot.setVisible(False)
+        # Initialize view mode controllers
+        self.globe_view = GlobeView(
+            self.view, 
+            self.scene_items, 
+            self.radius, 
+            self.earth_radius
+        )
+        
+        self.ground_view = GroundView(
+            self.view, 
+            self.scene_items, 
+            self.radius, 
+            self.earth_radius
+        )
+        self.ground_view.set_fov(90.0)
     
     def on_now(self):
         """Set time to current"""
@@ -280,78 +273,27 @@ class MainWindow(QtWidgets.QWidget):
             self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
         self.update_scene()
-        # If in ground view, refresh the view
+        
+        # Refresh current view
         if self.current_view_mode == "ground":
             self.on_ground_view()
     
     def on_zoom_changed(self, value):
         """Handle zoom slider changes"""
-        self.ground_fov = float(value)
         self.zoom_value_label.setText(f"{value}°")
-        if self.current_view_mode == "ground":
-            self.on_ground_view()
+        self.ground_view.set_fov(float(value))
     
     def on_sphere_view(self):
-        """Set camera to sphere view (external view of celestial sphere)"""
+        """Switch to sphere/globe view"""
         self.current_view_mode = "sphere"
-        self._set_object_visibility(sphere_mode=True)
-        
-        self.view.opts['center'] = QtGui.QVector3D(0, 0, 0)
-        self.view.opts['elevation'] = 30
-        self.view.opts['azimuth'] = 45
-        self.view.opts['distance'] = 2.6
-        self.view.opts['fov'] = 60
-        self.view.update()
+        self.globe_view.activate()
     
     def on_ground_view(self):
-        """Set camera to ground view (observer on Earth looking south at horizon)"""
+        """Switch to ground view"""
         self.current_view_mode = "ground"
-        self._set_object_visibility(sphere_mode=False)
-        
-        p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
         dt_utc_naive = self.dt_utc.replace(tzinfo=None)
         gmst = gmst_degrees(dt_utc_naive)
-        Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
-        p_view = (Rearth @ p_ecef).astype(np.float32)
-        
-        east, north, up = ecef_basis_at(self.lat, self.lon)
-        east_view = (Rearth @ east).astype(np.float32)
-        north_view = (Rearth @ north).astype(np.float32)
-        up_view = (Rearth @ up).astype(np.float32)
-        
-        # Update compass positions
-        self._update_compass_positions(p_view, Rearth)
-        
-        # Position and orient ground plane
-        self.ground_plane.resetTransform()
-        # First translate to observer position
-        self.ground_plane.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
-        
-        # Rotate ground plane to be horizontal in local frame
-        # We need to align the ground plane's normal with the local "up" direction
-        z_axis = np.array([0, 0, 1], dtype=np.float32)
-        # Calculate rotation to align z-axis with up_view
-        rotation_axis = np.cross(z_axis, up_view)
-        rotation_axis_norm = np.linalg.norm(rotation_axis)
-        if rotation_axis_norm > 1e-6:
-            rotation_axis = rotation_axis / rotation_axis_norm
-            angle = np.arccos(np.clip(np.dot(z_axis, up_view), -1.0, 1.0))
-            angle_deg = np.rad2deg(angle)
-            self.ground_plane.rotate(angle_deg, rotation_axis[0], rotation_axis[1], rotation_axis[2])
-        
-        # Camera setup - place camera at observer position
-        cam_pos = p_view
-        look_dir = -north_view  # Look south
-        look_dir = look_dir / (np.linalg.norm(look_dir) + 1e-12)
-        
-        self.view.opts['center'] = QtGui.QVector3D(float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2]))
-        self.view.opts['distance'] = 0.001
-        self.view.opts['fov'] = self.ground_fov
-        
-        azimuth = np.rad2deg(np.arctan2(look_dir[1], look_dir[0]))
-        self.view.opts['azimuth'] = float(azimuth)
-        self.view.opts['elevation'] = 0.0
-        self.view.update()
+        self.ground_view.activate(self.lat, self.lon, gmst, EARTH_ROT_SIGN)
     
     def update_scene(self):
         """Update scene for current time and location"""
@@ -360,54 +302,29 @@ class MainWindow(QtWidgets.QWidget):
         gmst = gmst_degrees(dt_utc_naive)
         lst = (gmst + self.lon) % 360.0
         
-        # EARTH FRAME
-        Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
+        # Update globe view elements
+        if self.current_view_mode == "sphere":
+            Rearth, p_view = self.globe_view.update_scene(
+                self.lat, self.lon, gmst, EARTH_ROT_SIGN
+            )
+        else:
+            # For ground view, we still need Rearth for celestial objects
+            from geometry.transformations import rotz_deg
+            Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
+            from astronomy.coordinates import latlon_to_ecef
+            p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
+            p_view = (Rearth @ p_ecef).astype(np.float32)
         
-        self.earth_item.resetTransform()
-        self.earth_item.rotate(EARTH_ROT_SIGN * gmst, 0, 0, 1)
+        # Update celestial objects (visible in both views)
+        self._update_celestial_objects(dt_utc_naive, lst)
         
-        p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
-        p_view = (Rearth @ p_ecef).astype(np.float32)
-        self.loc_marker.resetTransform()
-        self.loc_marker.translate(float(p_view[0]), float(p_view[1]), float(p_view[2]))
-        
-        horizon_ecef = make_horizon_ring_ecef(self.radius, self.lat, self.lon, n=600)
-        horizon_view = (Rearth @ horizon_ecef.T).T.astype(np.float32)
-        self.horizon_item.setData(pos=horizon_view)
-        
-        axis_pts = np.array([[0.0, 0.0, -self.radius],
-                             [0.0, 0.0,  self.radius]], dtype=np.float32)
-        self.earth_axis_item.setData(pos=axis_pts)
-        
-        # CELESTIAL FRAME
-        eq = make_ring(self.radius, 600, "xy")
-        self.eq_item.setData(pos=eq)
-        
-        self.mw_item.setData(pos=self.mw_pts_eq, color=self.mw_cols)
-        
-        # Sun
+        # Update info display
         sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
-        from astronomy.coordinates import ra_dec_to_unit_vector_equatorial
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
-        sun_pos = (self.radius * sun_eq).astype(np.float32)
-        
-        self.sun_dot.setData(pos=sun_pos.reshape(1, 3))
-        
-        # Realistic sun disk size
-        disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
-        self.sun_item.setMeshData(meshdata=make_disk_mesh(
-            center=sun_pos,
-            normal=sun_eq.astype(np.float32),
-            radius=disk_radius,
-            segments=56
-        ))
-        
-        # Calculate sun position
         M = equatorial_to_local_enu_matrix(self.lat, lst)
         sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
         sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
         alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
-        alt_formula, az_formula = alt_az_from_ra_dec(self.lat, lst, sun_ra, sun_dec)
         
         self.info.setText(
             f"Lat {self.lat:.4f}  Lon {self.lon:.4f}\n"
@@ -416,22 +333,43 @@ class MainWindow(QtWidgets.QWidget):
             f"Sun alt {alt_vec:.2f}° az {az_vec:.2f}°"
         )
         
+        # Debug output
+        if DEBUG_ENABLED:
+            from debug.debug_output import print_celestial_debug, print_gc_visibility
+            alt_formula, az_formula = alt_az_from_ra_dec(self.lat, lst, sun_ra, sun_dec)
+            gc_eq = galactic_center_unit_eq()
+            print_celestial_debug(
+                self.dt_local, self.dt_utc, self.lat, self.lon, jd, gmst, lst,
+                sun_ra, sun_dec, sun_eq, sun_local, alt_vec, az_vec, 
+                alt_formula, az_formula, M, 
+                latlon_to_ecef(self.lat, self.lon, self.earth_radius), 
+                p_view, gc_eq, self.mw_pts_eq, self.radius, 
+                EARTH_ROT_SIGN, APP_TZ
+            )
+            print_gc_visibility(self.lat, self.lon, self.dt_local, APP_TZ)
+    
+    def _update_celestial_objects(self, dt_utc_naive, lst):
+        """Update celestial objects (Milky Way, Sun, Galactic Center)"""
+        # Milky Way (already in equatorial coords, no rotation needed)
+        self.mw_item.setData(pos=self.mw_pts_eq, color=self.mw_cols)
+        
+        # Sun position and disk
+        sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
+        sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
+        sun_pos = (self.radius * sun_eq).astype(np.float32)
+        
+        self.sun_dot.setData(pos=sun_pos.reshape(1, 3))
+        
+        # Realistic sun disk size
+        disk_radius = self.radius * np.sin(np.deg2rad(SUN_ANG_RADIUS_DEG))
+        self.sun_disk_item.setMeshData(meshdata=make_disk_mesh(
+            center=sun_pos,
+            normal=sun_eq.astype(np.float32),
+            radius=disk_radius,
+            segments=56
+        ))
+        
         # Galactic center
         gc_eq = galactic_center_unit_eq()
         gc_pos = (self.radius * gc_eq).astype(np.float32)
         self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
-        
-        # Update ground view elements if active (do this after scene update)
-        if self.current_view_mode == "ground":
-            self._update_compass_positions(p_view, Rearth)
-        
-        # Debug output
-        if DEBUG_ENABLED:
-            from debug.debug_output import print_celestial_debug, print_gc_visibility
-            print_celestial_debug(
-                self.dt_local, self.dt_utc, self.lat, self.lon, jd, gmst, lst,
-                sun_ra, sun_dec, sun_eq, sun_local, alt_vec, az_vec, 
-                alt_formula, az_formula, M, p_ecef, p_view, gc_eq, 
-                self.mw_pts_eq, self.radius, EARTH_ROT_SIGN, APP_TZ
-            )
-            print_gc_visibility(self.lat, self.lon, self.dt_local, APP_TZ)
