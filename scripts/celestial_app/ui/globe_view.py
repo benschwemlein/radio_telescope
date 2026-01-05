@@ -3,9 +3,9 @@ Globe View Mode - External view of celestial sphere with Earth
 """
 import numpy as np
 from PyQt6 import QtGui
-from geometry.transformations import rotz_deg
-from astronomy.coordinates import latlon_to_ecef, make_horizon_ring_ecef
-from geometry.mesh_generation import make_ring
+from ..geometry.transformations import rotz_deg
+from ..astronomy.coordinates import latlon_to_ecef, make_horizon_ring_ecef
+from ..geometry.mesh_generation import make_ring
 
 
 class GlobeView:
@@ -39,20 +39,22 @@ class GlobeView:
     
     def _set_visibility(self, visible: bool):
         """Set visibility of objects in globe view"""
-        # Show sphere view objects
-        self.items['sky'].setVisible(visible)
-        self.items['earth'].setVisible(visible)
-        self.items['loc_marker'].setVisible(visible)
-        self.items['earth_axis'].setVisible(visible)
-        self.items['sun_dot'].setVisible(visible)
+        # Show ALL globe view objects
+        self.items['sky'].setVisible(True)
+        self.items['earth'].setVisible(True)
+        self.items['loc_marker'].setVisible(True)
+        self.items['earth_axis'].setVisible(True)
+        self.items['sun_dot'].setVisible(True)
+        self.items['sun_disk'].setVisible(True)
+        self.items['mw'].setVisible(True)
+        self.items['eq'].setVisible(True)
+        self.items['gc_dot'].setVisible(True)
+        self.items['horizon'].setVisible(True)
         
-        # Hide ground view objects
+        # Hide ALL ground view objects
         self.items['ground_plane'].setVisible(False)
         for marker in self.items['compass_markers'].values():
             marker.setVisible(False)
-        
-        # Sun disk visible in both modes
-        self.items['sun_disk'].setVisible(visible)
     
     def _set_camera(self):
         """Set camera position and orientation for globe view"""
