@@ -19,85 +19,55 @@ class WT901BLE:
         self.write_char = None
         
     def parse_data(self, data):
-        """Parse the sensor data packet"""
-        if len(data) < 11:
+        """Parse the sensor data packet (20 bytes combined format)"""
+        if len(data) != 20:
             return None
             
         # Check header
-        if data[0] != 0x55:
+        if data[0] != 0x55 or data[1] != 0x61:
             return None
-            
-        packet_type = data[1]
         
-        result = {}
+        # Parse acceleration (bytes 2-7)
+        ax = struct.unpack('<h', data[2:4])[0] / 32768.0 * 16  # g
+        ay = struct.unpack('<h', data[4:6])[0] / 32768.0 * 16
+        az = struct.unpack('<h', data[6:8])[0] / 32768.0 * 16
         
-        # Acceleration data (0x51)
-        if packet_type == 0x51:
-            ax = struct.unpack('<h', data[2:4])[0] / 32768.0 * 16  # g
-            ay = struct.unpack('<h', data[4:6])[0] / 32768.0 * 16
-            az = struct.unpack('<h', data[6:8])[0] / 32768.0 * 16
-            temp = struct.unpack('<h', data[8:10])[0] / 100.0  # °C
-            result = {
-                'type': 'acceleration',
-                'ax': ax,
-                'ay': ay,
-                'az': az,
-                'temperature': temp
-            }
-            
-        # Angular velocity data (0x52)
-        elif packet_type == 0x52:
-            wx = struct.unpack('<h', data[2:4])[0] / 32768.0 * 2000  # °/s
-            wy = struct.unpack('<h', data[4:6])[0] / 32768.0 * 2000
-            wz = struct.unpack('<h', data[6:8])[0] / 32768.0 * 2000
-            result = {
-                'type': 'angular_velocity',
-                'wx': wx,
-                'wy': wy,
-                'wz': wz
-            }
-            
-        # Angle data (0x53)
-        elif packet_type == 0x53:
-            roll = struct.unpack('<h', data[2:4])[0] / 32768.0 * 180  # degrees
-            pitch = struct.unpack('<h', data[4:6])[0] / 32768.0 * 180
-            yaw = struct.unpack('<h', data[6:8])[0] / 32768.0 * 180
-            result = {
-                'type': 'angle',
-                'roll': roll,
-                'pitch': pitch,
-                'yaw': yaw
-            }
-            
-        # Magnetic field data (0x54)
-        elif packet_type == 0x54:
-            mx = struct.unpack('<h', data[2:4])[0]  # raw values
-            my = struct.unpack('<h', data[4:6])[0]
-            mz = struct.unpack('<h', data[6:8])[0]
-            result = {
-                'type': 'magnetic_field',
-                'mx': mx,
-                'my': my,
-                'mz': mz
-            }
+        # Parse angular velocity (bytes 8-13)
+        wx = struct.unpack('<h', data[8:10])[0] / 32768.0 * 2000  # °/s
+        wy = struct.unpack('<h', data[10:12])[0] / 32768.0 * 2000
+        wz = struct.unpack('<h', data[12:14])[0] / 32768.0 * 2000
+        
+        # Parse angles (bytes 14-19)
+        roll = struct.unpack('<h', data[14:16])[0] / 32768.0 * 180  # degrees
+        pitch = struct.unpack('<h', data[16:18])[0] / 32768.0 * 180
+        yaw = struct.unpack('<h', data[18:20])[0] / 32768.0 * 180
+        
+        result = {
+            'type': 'combined',
+            'ax': ax,
+            'ay': ay,
+            'az': az,
+            'wx': wx,
+            'wy': wy,
+            'wz': wz,
+            'roll': roll,
+            'pitch': pitch,
+            'yaw': yaw
+        }
             
         return result
     
     def notification_handler(self, sender, data):
         """Handle incoming BLE notifications"""
-        # Print raw data for debugging
-        print(f"Raw data ({len(data)} bytes): {data.hex()}")
-        
         parsed = self.parse_data(data)
         if parsed:
-            if parsed['type'] == 'acceleration':
-                print(f"Accel: X={parsed['ax']:7.3f}g  Y={parsed['ay']:7.3f}g  Z={parsed['az']:7.3f}g  Temp={parsed['temperature']:5.1f}°C")
-            elif parsed['type'] == 'angular_velocity':
-                print(f"Gyro:  X={parsed['wx']:7.1f}°/s Y={parsed['wy']:7.1f}°/s Z={parsed['wz']:7.1f}°/s")
-            elif parsed['type'] == 'angle':
-                print(f"Angle: Roll={parsed['roll']:7.2f}°  Pitch={parsed['pitch']:7.2f}°  Yaw={parsed['yaw']:7.2f}°")
-            elif parsed['type'] == 'magnetic_field':
-                print(f"Mag:   X={parsed['mx']:6d}    Y={parsed['my']:6d}    Z={parsed['mz']:6d}")
+            # Print all data on one line for compact display
+            print(f"Accel: X={parsed['ax']:6.3f}g Y={parsed['ay']:6.3f}g Z={parsed['az']:6.3f}g | "
+                  f"Gyro: X={parsed['wx']:7.1f}°/s Y={parsed['wy']:7.1f}°/s Z={parsed['wz']:7.1f}°/s | "
+                  f"Angle: R={parsed['roll']:6.2f}° P={parsed['pitch']:6.2f}° Y={parsed['yaw']:6.2f}°")
+        else:
+            # Print raw data if parsing fails
+            print(f"Raw data ({len(data)} bytes): {data.hex()}")
     
     async def discover_and_connect(self):
         """Discover characteristics and connect to the sensor"""
