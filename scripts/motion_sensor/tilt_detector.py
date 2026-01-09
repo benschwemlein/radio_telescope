@@ -93,8 +93,8 @@ class DishMonitor:
         await self.client.write_gatt_char(self.write_char, unlock_cmd, response=False)
         await asyncio.sleep(0.1)
         
-        # Set return rate to 10Hz
-        rate_cmd = bytes([0xFF, 0xAA, 0x03, 0x06, 0x00])
+        # Set return rate to 1Hz (once per second)
+        rate_cmd = bytes([0xFF, 0xAA, 0x03, 0x03, 0x00])
         await self.client.write_gatt_char(self.write_char, rate_cmd, response=False)
         await asyncio.sleep(0.1)
         
