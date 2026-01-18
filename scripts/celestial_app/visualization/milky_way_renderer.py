@@ -40,13 +40,7 @@ class MilkyWayRenderer:
         """
         Sample brightness from the Milky Way image at galactic coordinates.
         
-        The image is a Mollweide projection in galactic coordinates:
-        - Horizontal center = galactic center (l=0°)
-        - Left edge = l=180° (anticenter side, wrapping from l=180° to l=360°=0°)
-        - Right edge = l=180° (anticenter, other side)
-        - Vertical center = galactic plane (b=0°)
-        - Top = north galactic pole (b=+90°)
-        - Bottom = south galactic pole (b=-90°)
+        Assumes equirectangular projection (simple rectangular mapping).
         
         Args:
             l_deg: Galactic longitude in degrees (0-360)
@@ -60,30 +54,30 @@ class MilkyWayRenderer:
         
         width, height = self.milky_way_image.size
         
-        # Normalize galactic longitude: 0-360 degrees
-        # The image center (x = width/2) corresponds to l=0° (galactic center)
-        # We need to shift so that l=0 is at center
-        # Map: l=0 -> 0.5, l=180 -> 0.0 or 1.0, l=360 -> 0.5
+        # Simple equirectangular mapping:
+        # The converted image has: left = l=0°, center = l=180°, right = l=360°
+        # (galactic center is at left/right edges)
         
-        # Shift longitude so center of image is l=0
-        l_shifted = (l_deg + 180) % 360  # Now l=180 is at position 0, l=0 is at position 180
-        l_norm = l_shifted / 360.0  # 0 to 1
+        # Map directly - no shift needed for equirectangular
+        x_norm = (l_deg % 360) / 360.0         # 0 to 1
+        y_norm = (90.0 - b_deg) / 180.0        # 0 to 1 (top to bottom)
         
-        # Latitude: -90 to +90 maps to bottom to top of image
-        # For Mollweide projection, need to handle the curved edges
-        # Simple approximation: linear mapping
-        b_norm = (b_deg + 90) / 180.0  # 0 (bottom, -90°) to 1 (top, +90°)
+        # Convert to pixels
+        x_pix = int(x_norm * width) % width
+        y_pix = int(y_norm * height)
+        y_pix = max(0, min(height - 1, y_pix))
         
-        # Convert to pixel coordinates
-        x = int(l_norm * width) % width
-        y = int((1.0 - b_norm) * height)  # Flip y axis (image y=0 is top)
-        y = max(0, min(height - 1, y))
-        
-        # Sample pixel value
-        pixel_value = self.milky_way_image.getpixel((x, y))
-        
-        # Normalize to 0-1
-        return pixel_value / 255.0
+        # Sample the pixel
+        try:
+            pixel_value = self.milky_way_image.getpixel((x_pix, y_pix))
+            brightness = pixel_value / 255.0
+            
+            # Boost faint regions for visibility
+            brightness = np.power(brightness, 0.5)
+            
+            return brightness
+        except:
+            return 0.0
     
     def generate_milky_way_texture_points(self, 
                                           density: int = 5000,
