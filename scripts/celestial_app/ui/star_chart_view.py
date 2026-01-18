@@ -67,7 +67,7 @@ class StarChartView(QtWidgets.QWidget):
         # Radius goes from 0 (zenith) to 90 (horizon)
         self.ax.set_ylim(0, 90)
         self.ax.set_theta_zero_location('N')  # North at top
-        self.ax.set_theta_direction(-1)  # Clockwise (E to right)
+        self.ax.set_theta_direction(1)  # Counter-clockwise (to match overhead view)
         
         # Grid styling
         self.ax.set_facecolor(self.bg_color)
@@ -144,6 +144,9 @@ class StarChartView(QtWidgets.QWidget):
             
             if alt > 0:  # Only plot if above horizon
                 alts.append(90 - alt)  # Convert altitude to zenith distance
+                # Matplotlib polar: 0°=N (top), increases clockwise with theta_direction=-1
+                # Astronomy: azimuth typically 0°=N, increases clockwise
+                # So we use az directly
                 azs.append(np.deg2rad(az))
                 alphas.append(0.1 + 0.7 * np.clip(mw_a[i], 0.0, 1.0))
         
