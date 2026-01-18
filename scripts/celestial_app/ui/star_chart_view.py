@@ -14,7 +14,7 @@ from astronomy.coordinates import (
     ra_dec_to_unit_vector_equatorial,
 )
 from astronomy.celestial_objects import sun_ra_dec_degrees, galactic_center_unit_eq
-from astronomy.galactic import build_milky_way_band_equatorial
+from visualization.milky_way_renderer import MilkyWayRenderer
 
 # Bright stars catalog (name, RA hours, Dec degrees, magnitude)
 BRIGHT_STARS = [
@@ -196,6 +196,14 @@ class StarChartView(QtWidgets.QWidget):
         super().__init__()
         self.radius = radius
         
+        # Initialize Milky Way renderer with background image
+        self.milky_way_renderer = MilkyWayRenderer(radius=radius)
+        # Load the Milky Way background image from app directory
+        try:
+            self.milky_way_renderer.load_milky_way_image('gal_background.jpg')
+        except Exception as e:
+            print(f"Could not load Milky Way background image: {e}")
+        
         # Create matplotlib figure
         self.figure = Figure(figsize=(10, 10), facecolor='#0a0a0e')
         self.canvas = FigureCanvasQTAgg(self.figure)
@@ -301,37 +309,79 @@ class StarChartView(QtWidgets.QWidget):
         self.canvas.draw()
     
     def _plot_milky_way(self, M):
-        """Plot the Milky Way band"""
-        # Generate Milky Way points in equatorial coordinates
-        mw_pts_eq, mw_a = build_milky_way_band_equatorial(
-            self.radius, half_width_deg=10.0, n=1600, m=33, seed=7
-        )
+        """Plot the Milky Way as a background texture image"""
+        if self.milky_way_renderer.milky_way_image is None:
+            return  # No image loaded
         
-        # Transform to local coordinates
-        mw_dirs_eq = mw_pts_eq / self.radius
-        mw_local = (M @ mw_dirs_eq.T).T
+        # Create a grid covering the entire sky chart
+        # We'll sample the Milky Way image at each grid point
+        n_az = 360  # Azimuth resolution
+        n_alt = 90  # Altitude resolution (from horizon to zenith)
         
-        # Convert to alt/az
-        alts = []
-        azs = []
-        alphas = []
+        # Create meshgrid for the chart (polar coordinates)
+        az_grid = np.linspace(0, 2*np.pi, n_az)
+        alt_grid = np.linspace(0, 90, n_alt)  # Zenith distance from 0 (zenith) to 90 (horizon)
         
-        for i, v in enumerate(mw_local):
-            v = v / (np.linalg.norm(v) + 1e-12)
-            alt, az = unit_vector_enu_to_alt_az(v)
-            
-            if alt > 0:  # Only plot if above horizon
-                alts.append(90 - alt)  # Convert altitude to zenith distance
-                # Matplotlib polar: 0°=N (top), increases clockwise with theta_direction=-1
-                # Astronomy: azimuth typically 0°=N, increases clockwise
-                # So we use az directly
-                azs.append(np.deg2rad(az))
-                alphas.append(0.1 + 0.7 * np.clip(mw_a[i], 0.0, 1.0))
+        AZ, ALT = np.meshgrid(az_grid, alt_grid)
         
-        if alts:
-            # Plot as scatter
-            colors = [(1, 1, 1, a) for a in alphas]
-            self.ax.scatter(azs, alts, s=2, c=colors, marker='.', zorder=1)
+        # Create brightness grid by sampling the Milky Way image
+        brightness_grid = np.zeros_like(AZ)
+        
+        for i in range(n_alt):
+            for j in range(n_az):
+                # Convert from chart coordinates to sky coordinates
+                az_deg = np.rad2deg(az_grid[j])
+                zenith_dist = alt_grid[i]
+                altitude = 90 - zenith_dist
+                
+                if altitude < 0:
+                    continue  # Below horizon
+                
+                # Convert alt/az to local ENU unit vector
+                alt_rad = np.deg2rad(altitude)
+                az_rad = az_grid[j]
+                
+                # ENU unit vector from alt/az
+                E = np.cos(alt_rad) * np.sin(az_rad)
+                N = np.cos(alt_rad) * np.cos(az_rad)
+                U = np.sin(alt_rad)
+                local_vec = np.array([E, N, U], dtype=np.float32)
+                
+                # Transform to equatorial coordinates (inverse of M)
+                M_inv = np.linalg.inv(M)
+                eq_vec = (M_inv @ local_vec).astype(np.float32)
+                eq_vec = eq_vec / (np.linalg.norm(eq_vec) + 1e-12)
+                
+                # Convert equatorial to galactic coordinates
+                gal_vec = self.milky_way_renderer._equatorial_to_galactic(eq_vec)
+                
+                # Convert galactic Cartesian to galactic (l, b)
+                l_rad = np.arctan2(gal_vec[1], gal_vec[0])
+                l_deg = np.rad2deg(l_rad) % 360
+                
+                b_rad = np.arcsin(np.clip(gal_vec[2], -1, 1))
+                b_deg = np.rad2deg(b_rad)
+                
+                # Sample brightness from Milky Way image
+                brightness = self.milky_way_renderer.sample_milky_way_at_galactic_coords(l_deg, b_deg)
+                brightness_grid[i, j] = brightness
+        
+        # Plot as a colored mesh
+        # Use a colormap that looks like the Milky Way
+        from matplotlib.colors import LinearSegmentedColormap
+        
+        # Create a custom colormap: black -> dark blue -> light blue/white
+        colors = [(0, 0, 0), (0.05, 0.05, 0.15), (0.3, 0.35, 0.5), (0.7, 0.75, 0.85), (0.95, 0.97, 1.0)]
+        n_bins = 256
+        cmap = LinearSegmentedColormap.from_list('milkyway', colors, N=n_bins)
+        
+        # Plot with transparency based on brightness
+        self.ax.pcolormesh(AZ, ALT, brightness_grid, 
+                          cmap=cmap, 
+                          shading='gouraud',
+                          alpha=0.6,
+                          zorder=0.5,
+                          vmin=0, vmax=1)
     
     def _plot_bright_stars(self, M):
         """Plot bright stars"""
