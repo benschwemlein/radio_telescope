@@ -254,9 +254,9 @@ class StarChartView(QtWidgets.QWidget):
         self.ax.set_yticks([0, 30, 60, 90])
         self.ax.set_yticklabels(['90°', '60°', '30°', '0°'], color=self.fg_color, fontsize=10)
         
-        # Azimuth labels (N, E, S, W)
+        # Azimuth ticks (labels handled by _add_compass_rose)
         self.ax.set_xticks(np.deg2rad([0, 90, 180, 270]))
-        self.ax.set_xticklabels(['N', 'E', 'S', 'W'], color=self.fg_color, fontsize=14, weight='bold')
+        self.ax.set_xticklabels([])  # Empty labels - custom compass rose adds them
         
         self.ax.spines['polar'].set_color(self.fg_color)
         self.ax.tick_params(colors=self.fg_color)
@@ -559,16 +559,18 @@ class StarChartView(QtWidgets.QWidget):
         }
         
         for label, azimuth in directions.items():
-            if len(label) == 2:  # Intermediate directions smaller
+            if len(label) == 2:  # Intermediate directions smaller and farther out
                 fontsize = 8
                 color = self.fg_color
                 alpha = 0.5
+                radius = 97  # Place intermediate directions farther from center
             else:  # Cardinal directions
                 fontsize = 10
                 color = '#ff6060' if label == 'N' else self.fg_color
                 alpha = 0.8
+                radius = 95  # Cardinal directions closer
             
-            self.ax.text(np.deg2rad(azimuth), 95, label,
+            self.ax.text(np.deg2rad(azimuth), radius, label,
                         ha='center', va='center',
                         fontsize=fontsize, color=color, 
                         alpha=alpha, weight='bold')
