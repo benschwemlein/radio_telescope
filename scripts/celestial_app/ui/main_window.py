@@ -1,4 +1,3 @@
-
 import sys
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -27,6 +26,11 @@ import pyqtgraph.opengl as gl
 from .globe_view import GlobeView
 from .star_chart_view import StarChartView
 
+# Radio Telescope imports
+from database import ScanDatabase
+from ui.scan_dialog import ScanEntryDialog
+from radio_telescope import ScanPath
+
 APP_TZ = ZoneInfo("America/New_York")
 EARTH_ROT_SIGN = 1.0
 SUN_ANG_RADIUS_DEG = 0.265
@@ -34,7 +38,7 @@ SUN_ANG_RADIUS_DEG = 0.265
 # Debug toggle - set to True to enable debug output
 DEBUG_ENABLED = False
 
-class MainWindow(QtWidgets.QWidget):
+class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Celestial Sphere - 3D & Star Chart")
@@ -45,9 +49,25 @@ class MainWindow(QtWidgets.QWidget):
         self.lon = -82.9988
         self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
+
+        # Radio Telescope: Initialize database and scan storage
+        self.scan_db = ScanDatabase()
+        self.scan_paths = []
+        self.scan_mesh_items = []
         
-        self._build_ui()
+        # Create central widget for QMainWindow
+        central_widget = QtWidgets.QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Build UI on central widget
+        self._build_ui(central_widget)
         self._build_scene()
+
+        # Radio Telescope: Create menu bar
+        self._create_menu_bar()
+
+        # Radio Telescope: Load saved scans
+        self._load_scans()
         
         # Initialize view mode
         self._init_view_mode()
@@ -55,9 +75,9 @@ class MainWindow(QtWidgets.QWidget):
         # Start with initial update
         self.update_all_views()
     
-    def _build_ui(self):
+    def _build_ui(self, parent):
         """Build Qt UI components - controls on left, views on right"""
-        layout = QtWidgets.QHBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(parent)
         
         # Left panel with controls
         left = QtWidgets.QVBoxLayout()
@@ -244,6 +264,9 @@ class MainWindow(QtWidgets.QWidget):
         # Update celestial objects in 3D view
         self._update_celestial_objects(dt_utc_naive, lst)
         
+        # Pass scan paths to star chart
+        self.star_chart.set_scan_paths(self.scan_paths)
+        
         # Update 2D star chart
         self.star_chart.update_chart(
             self.lat, self.lon, lst, self.dt_local, dt_utc_naive
@@ -304,4 +327,89 @@ class MainWindow(QtWidgets.QWidget):
         gc_eq = galactic_center_unit_eq()
         gc_pos = (self.radius * gc_eq).astype(np.float32)
         self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
-
+    
+    def _create_menu_bar(self):
+        """Create the menu bar."""
+        menubar = self.menuBar()
+        
+        # Radio Telescope menu
+        radio_menu = menubar.addMenu("Radio Telescope")
+        
+        new_scan_action = QtGui.QAction("New Scan...", self)
+        new_scan_action.triggered.connect(self._on_new_scan)
+        radio_menu.addAction(new_scan_action)
+    
+    def _on_new_scan(self):
+        """Handle new scan menu action."""
+        dialog = ScanEntryDialog(self)
+        
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            scan_data = dialog.get_scan_data()
+            
+            # Save to database
+            scan_id = self.scan_db.add_scan(
+                name=scan_data['name'],
+                altitude=scan_data['altitude'],
+                azimuth=scan_data['azimuth'],
+                duration_seconds=scan_data['duration_seconds'],
+                resolution=scan_data['resolution'],
+                start_time=scan_data['start_time'],
+                notes=scan_data['notes']
+            )
+            
+            # Create scan path and visualize
+            self._add_scan_visualization(scan_data)
+            
+            # Refresh views
+            self.update_all_views()
+            
+            QtWidgets.QMessageBox.information(
+                self,
+                "Scan Saved",
+                f"Scan '{scan_data['name']}' has been saved."
+            )
+    
+    def _load_scans(self):
+        """Load all scans from database and create visualizations."""
+        scans = self.scan_db.get_all_scans()
+        
+        for scan_data in scans:
+            self._add_scan_visualization(scan_data)
+    
+    def _add_scan_visualization(self, scan_data):
+        """
+        Create and add scan path visualization.
+        
+        Args:
+            scan_data: Dictionary with scan parameters
+        """
+        # Create ScanPath object
+        scan_path = ScanPath(
+            altitude=scan_data['altitude'],
+            azimuth=scan_data['azimuth'],
+            duration_seconds=scan_data['duration_seconds'],
+            resolution=scan_data['resolution'],
+            start_time=scan_data['start_time'],
+            latitude=self.lat,
+            longitude=self.lon
+        )
+        
+        self.scan_paths.append(scan_path)
+        
+        # Create 3D mesh for globe view
+        vertices, faces = scan_path.get_band_mesh_3d(radius=self.radius, segments=16)
+        
+        if len(vertices) > 0 and len(faces) > 0:
+            md = gl.MeshData(vertexes=vertices, faces=faces)
+            mesh_item = gl.GLMeshItem(
+                meshdata=md,
+                smooth=True,
+                drawEdges=False,
+                shader="shaded",
+                glOptions="translucent"
+            )
+            # Red semi-transparent
+            mesh_item.setColor((1.0, 0.0, 0.0, 0.3))
+            
+            self.view.addItem(mesh_item)
+            self.scan_mesh_items.append(mesh_item)

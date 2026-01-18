@@ -3,6 +3,7 @@ Star Chart View - Flat 2D projection of the sky as seen from observer's location
 Similar to a planisphere or star finder that can be printed
 """
 import numpy as np
+from datetime import datetime
 from geometry.transformations import normalize_vector
 from PyQt6 import QtWidgets, QtGui, QtCore
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -235,6 +236,9 @@ class StarChartView(QtWidgets.QWidget):
         # Initialize the axes
         self.ax = self.figure.add_subplot(111, projection='polar')
         self._setup_axes()
+        
+        # Radio telescope scans
+        self.scan_paths = []
     
     def _apply_theme(self):
         """Apply color theme based on inverted state"""
@@ -268,6 +272,11 @@ class StarChartView(QtWidgets.QWidget):
         self.ax.spines['polar'].set_color(self.fg_color)
         self.ax.tick_params(colors=self.fg_color)
     
+    
+    def set_scan_paths(self, scan_paths):
+        """Set scan paths for visualization."""
+        self.scan_paths = scan_paths if scan_paths else []
+    
     def update_chart(self, lat, lon, lst, dt_local, dt_utc):
         """
         Update the star chart for given time and location
@@ -280,6 +289,9 @@ class StarChartView(QtWidgets.QWidget):
             dt_utc: UTC datetime (naive)
         """
         self._setup_axes()
+        
+        # Radio telescope scans
+        self.scan_paths = []
         
         # Get transformation matrix
         M = equatorial_to_local_enu_matrix(lat, lst)
@@ -307,6 +319,12 @@ class StarChartView(QtWidgets.QWidget):
         
         # Add compass rose at horizon
         self._add_compass_rose()
+        
+        # Plot radio telescope scans
+        self.current_dt_utc = dt_utc
+        self.current_lat = lat
+        self.current_lon = lon
+        self._plot_scan_bands()
         
         # Add title with location and time info
         title = (f"Sky View from Lat {lat:.2f}°, Lon {lon:.2f}°\n"
@@ -581,6 +599,32 @@ class StarChartView(QtWidgets.QWidget):
                         ha='center', va='center',
                         fontsize=fontsize, color=color, 
                         alpha=alpha, weight='bold')
+    
+    
+    def _plot_scan_bands(self):
+        """Plot radio telescope scan bands."""
+        if not hasattr(self, 'scan_paths') or not self.scan_paths:
+            return
+        
+        for scan_path in self.scan_paths:
+            # Get current viewing parameters
+            current_time = getattr(self, 'current_dt_utc', datetime.now())
+            current_lat = getattr(self, 'current_lat', 39.96)
+            current_lon = getattr(self, 'current_lon', -82.99)
+            
+            chart_points = scan_path.get_visible_band_for_chart(
+                current_time, current_lat, current_lon
+            )
+            
+            if len(chart_points) > 1:
+                zenith_dists = [p[0] for p in chart_points]
+                azimuths = [np.deg2rad(p[1]) for p in chart_points]
+                
+                # Plot as a thick line
+                self.ax.plot(azimuths, zenith_dists,
+                            color='red', linewidth=3,
+                            alpha=0.5, zorder=8,
+                            label='Radio Scan')
     
     def toggle_colors(self):
         """Toggle between dark and light color scheme for printing"""
