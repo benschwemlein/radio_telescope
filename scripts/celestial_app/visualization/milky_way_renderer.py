@@ -40,6 +40,14 @@ class MilkyWayRenderer:
         """
         Sample brightness from the Milky Way image at galactic coordinates.
         
+        The image is a Mollweide projection in galactic coordinates:
+        - Horizontal center = galactic center (l=0°)
+        - Left edge = l=180° (anticenter side, wrapping from l=180° to l=360°=0°)
+        - Right edge = l=180° (anticenter, other side)
+        - Vertical center = galactic plane (b=0°)
+        - Top = north galactic pole (b=+90°)
+        - Bottom = south galactic pole (b=-90°)
+        
         Args:
             l_deg: Galactic longitude in degrees (0-360)
             b_deg: Galactic latitude in degrees (-90 to +90)
@@ -50,25 +58,25 @@ class MilkyWayRenderer:
         if self.milky_way_image is None:
             return 0.0
         
-        # Image is in galactic coordinates with Mollweide or similar projection
-        # Typically: center = galactic center (l=0), edges = l=180
-        # Top/bottom = galactic poles (b=+/-90)
-        
         width, height = self.milky_way_image.size
         
-        # Convert galactic coordinates to image pixel coordinates
-        # Longitude: 0-360 degrees maps to image width
-        # Latitude: -90 to +90 maps to image height
+        # Normalize galactic longitude: 0-360 degrees
+        # The image center (x = width/2) corresponds to l=0° (galactic center)
+        # We need to shift so that l=0 is at center
+        # Map: l=0 -> 0.5, l=180 -> 0.0 or 1.0, l=360 -> 0.5
         
-        # Normalize longitude to 0-1
-        l_norm = (l_deg % 360) / 360.0
+        # Shift longitude so center of image is l=0
+        l_shifted = (l_deg + 180) % 360  # Now l=180 is at position 0, l=0 is at position 180
+        l_norm = l_shifted / 360.0  # 0 to 1
         
-        # Normalize latitude to 0-1 (with -90 at bottom, +90 at top)
-        b_norm = (b_deg + 90) / 180.0
+        # Latitude: -90 to +90 maps to bottom to top of image
+        # For Mollweide projection, need to handle the curved edges
+        # Simple approximation: linear mapping
+        b_norm = (b_deg + 90) / 180.0  # 0 (bottom, -90°) to 1 (top, +90°)
         
         # Convert to pixel coordinates
         x = int(l_norm * width) % width
-        y = int((1.0 - b_norm) * height)  # Flip y axis
+        y = int((1.0 - b_norm) * height)  # Flip y axis (image y=0 is top)
         y = max(0, min(height - 1, y))
         
         # Sample pixel value
@@ -211,18 +219,22 @@ class MilkyWayRenderer:
         Convert from galactic coordinates to equatorial (J2000) coordinates.
         Uses IAU standard transformation matrix.
         
+        Galactic coordinate system (IAU 1958):
+        - North galactic pole: RA = 192.859°, Dec = 27.128° (J2000)
+        - Galactic center: RA = 266.405°, Dec = -28.936° (J2000)
+        
         Args:
             gal_vec: Unit vector in galactic coordinates (x, y, z)
             
         Returns:
             Unit vector in equatorial J2000 coordinates
         """
-        # Rotation matrix from galactic to equatorial (J2000)
-        # Based on IAU definitions
+        # CORRECT rotation matrix from galactic to equatorial (J2000)
+        # This is the transpose of the equatorial-to-galactic matrix
         R = np.array([
-            [-0.054875560416, -0.873437090234, -0.483835015548],
-            [ 0.494109427875, -0.444829629960,  0.746982248696],
-            [-0.867666149019, -0.198076373431,  0.455983776175]
+            [-0.0548755604,  0.4941094279, -0.8676661490],
+            [-0.8734370902, -0.4448296300, -0.1980763734],
+            [-0.4838350155,  0.7469822445,  0.4559837762]
         ], dtype=np.float32)
         
         eq_vec = R @ gal_vec
@@ -231,7 +243,7 @@ class MilkyWayRenderer:
     def _equatorial_to_galactic(self, eq_vec: np.ndarray) -> np.ndarray:
         """
         Convert from equatorial (J2000) to galactic coordinates.
-        Uses transpose of the galactic-to-equatorial matrix.
+        Uses IAU standard transformation matrix.
         
         Args:
             eq_vec: Unit vector in equatorial J2000 coordinates
@@ -239,14 +251,14 @@ class MilkyWayRenderer:
         Returns:
             Unit vector in galactic coordinates
         """
-        # Transpose of the galactic-to-equatorial matrix
-        R_inv = np.array([
-            [-0.054875560416,  0.494109427875, -0.867666149019],
-            [-0.873437090234, -0.444829629960, -0.198076373431],
-            [-0.483835015548,  0.746982248696,  0.455983776175]
+        # CORRECT rotation matrix from equatorial to galactic
+        R = np.array([
+            [-0.0548755604, -0.8734370902, -0.4838350155],
+            [ 0.4941094279, -0.4448296300,  0.7469822445],
+            [-0.8676661490, -0.1980763734,  0.4559837762]
         ], dtype=np.float32)
         
-        gal_vec = R_inv @ eq_vec
+        gal_vec = R @ eq_vec
         return gal_vec / (np.linalg.norm(gal_vec) + 1e-12)
     
     def _get_width_factor(self, galactic_longitude_deg: float) -> float:
