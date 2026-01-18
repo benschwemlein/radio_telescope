@@ -22,8 +22,9 @@ from geometry.mesh_generation import make_disk_mesh, make_uv_sphere
 from geometry.transformations import rotz_deg
 import pyqtgraph.opengl as gl
 
-# Import only the globe view
+# Import view modes
 from .globe_view import GlobeView
+from .star_chart_view import StarChartView
 
 APP_TZ = ZoneInfo("America/New_York")
 EARTH_ROT_SIGN = 1.0
@@ -35,7 +36,7 @@ DEBUG_ENABLED = False
 class MainWindow(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Celestial Sphere")
+        self.setWindowTitle("Celestial Sphere - 3D & Star Chart")
         self.scene_builder = SceneBuilder(radius=1.0, earth_radius=0.36)
         self.radius = self.scene_builder.radius
         self.earth_radius = self.scene_builder.earth_radius
@@ -50,12 +51,14 @@ class MainWindow(QtWidgets.QWidget):
         # Initialize view mode
         self._init_view_mode()
         
-        # Start with globe view
-        self.update_scene()
+        # Start with initial update
+        self.update_all_views()
     
     def _build_ui(self):
-        """Build Qt UI components"""
+        """Build Qt UI components - controls on left, views on right"""
         layout = QtWidgets.QHBoxLayout(self)
+        
+        # Left panel with controls
         left = QtWidgets.QVBoxLayout()
         layout.addLayout(left, 0)
         
@@ -82,13 +85,28 @@ class MainWindow(QtWidgets.QWidget):
         left.addWidget(self.info)
         left.addStretch(1)
         
+        # Right side: Tabbed view for 3D and 2D
+        self.tabs = QtWidgets.QTabWidget()
+        
+        # 3D Globe View tab
+        self.globe_widget = QtWidgets.QWidget()
+        globe_layout = QtWidgets.QVBoxLayout(self.globe_widget)
         self.view = FixedGLViewWidget()
         self.view.setBackgroundColor((10, 10, 14))
         self.view.set_fixed_distance(2.6)
-        layout.addWidget(self.view, 1)
+        globe_layout.addWidget(self.view)
+        self.tabs.addTab(self.globe_widget, "3D Globe View")
         
+        # 2D Star Chart tab
+        self.star_chart = StarChartView(radius=self.radius)
+        self.tabs.addTab(self.star_chart, "2D Star Chart (Printable)")
+        
+        layout.addWidget(self.tabs, 1)  # Takes up remaining space
+        
+        # Connect signals
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
+        self.tabs.currentChanged.connect(self.on_tab_changed)
     
     def _build_scene(self):
         """Build 3D scene objects"""
@@ -203,22 +221,32 @@ class MainWindow(QtWidgets.QWidget):
         except Exception:
             self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
-        self.update_scene()
+        self.update_all_views()
     
-    def update_scene(self):
-        """Update scene for current time and location"""
+    def on_tab_changed(self, index):
+        """Handle tab changes"""
+        # Refresh the current view when switching tabs
+        self.update_all_views()
+    
+    def update_all_views(self):
+        """Update both 3D globe and 2D star chart"""
         dt_utc_naive = self.dt_utc.replace(tzinfo=None)
         jd = julian_day(dt_utc_naive)
         gmst = gmst_degrees(dt_utc_naive)
         lst = (gmst + self.lon) % 360.0
         
-        # Update globe view elements
+        # Update 3D globe view
         Rearth, p_view = self.globe_view.update_scene(
             self.lat, self.lon, gmst, EARTH_ROT_SIGN
         )
         
-        # Update celestial objects
+        # Update celestial objects in 3D view
         self._update_celestial_objects(dt_utc_naive, lst)
+        
+        # Update 2D star chart
+        self.star_chart.update_chart(
+            self.lat, self.lon, lst, self.dt_local, dt_utc_naive
+        )
         
         # Update info display
         sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc_naive)
