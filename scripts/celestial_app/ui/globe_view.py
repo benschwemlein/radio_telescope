@@ -3,9 +3,9 @@ Globe View Mode - External view of celestial sphere with Earth
 """
 import numpy as np
 from PyQt6 import QtGui
-from ..geometry.transformations import rotz_deg
-from ..astronomy.coordinates import latlon_to_ecef, make_horizon_ring_ecef
-from ..geometry.mesh_generation import make_ring
+from geometry.transformations import rotz_deg
+from astronomy.coordinates import latlon_to_ecef, make_horizon_ring_ecef
+from geometry.mesh_generation import make_ring
 
 
 class GlobeView:
@@ -39,7 +39,7 @@ class GlobeView:
     
     def _set_visibility(self, visible: bool):
         """Set visibility of objects in globe view"""
-        # Show ALL globe view objects
+        # Show all globe view objects
         self.items['sky'].setVisible(True)
         self.items['earth'].setVisible(True)
         self.items['loc_marker'].setVisible(True)
@@ -51,8 +51,7 @@ class GlobeView:
         self.items['gc_dot'].setVisible(True)
         self.items['horizon'].setVisible(True)
         
-        # Hide ALL ground view objects
-        self.items['ground_plane'].setVisible(False)
+        # Hide compass markers (not needed in globe view)
         for marker in self.items['compass_markers'].values():
             marker.setVisible(False)
     

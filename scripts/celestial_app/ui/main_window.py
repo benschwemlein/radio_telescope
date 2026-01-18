@@ -14,15 +14,16 @@ from astronomy.coordinates import (
     unit_vector_enu_to_alt_az,
     alt_az_from_ra_dec,
     make_horizon_ring_ecef,
-    ra_dec_to_unit_vector_equatorial
+    ra_dec_to_unit_vector_equatorial,
+    latlon_to_ecef
 )
 from astronomy.celestial_objects import sun_ra_dec_degrees, galactic_center_unit_eq
-from geometry.mesh_generation import make_disk_mesh
+from geometry.mesh_generation import make_disk_mesh, make_uv_sphere
+from geometry.transformations import rotz_deg
 import pyqtgraph.opengl as gl
 
-# Import the new view mode classes
+# Import only the globe view
 from .globe_view import GlobeView
-from .ground_view import GroundView
 
 APP_TZ = ZoneInfo("America/New_York")
 EARTH_ROT_SIGN = 1.0
@@ -46,11 +47,10 @@ class MainWindow(QtWidgets.QWidget):
         self._build_ui()
         self._build_scene()
         
-        # Initialize view modes
-        self._init_view_modes()
+        # Initialize view mode
+        self._init_view_mode()
         
         # Start with globe view
-        self.current_view_mode = "sphere"
         self.update_scene()
     
     def _build_ui(self):
@@ -77,32 +77,6 @@ class MainWindow(QtWidgets.QWidget):
         btn_row.addWidget(self.now_btn)
         left.addLayout(btn_row)
         
-        # Add view mode buttons
-        view_row = QtWidgets.QHBoxLayout()
-        self.sphere_view_btn = QtWidgets.QPushButton("Sphere View")
-        self.ground_view_btn = QtWidgets.QPushButton("Ground View")
-        view_row.addWidget(self.sphere_view_btn)
-        view_row.addWidget(self.ground_view_btn)
-        left.addLayout(view_row)
-        
-        # Add zoom slider for ground view
-        zoom_label = QtWidgets.QLabel("Ground View Zoom (FOV)")
-        left.addWidget(zoom_label)
-        
-        zoom_layout = QtWidgets.QHBoxLayout()
-        self.zoom_slider = QtWidgets.QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setMinimum(10)
-        self.zoom_slider.setMaximum(120)
-        self.zoom_slider.setValue(90)
-        self.zoom_slider.setTickPosition(QtWidgets.QSlider.TickPosition.TicksBelow)
-        self.zoom_slider.setTickInterval(10)
-        self.zoom_slider.valueChanged.connect(self.on_zoom_changed)
-        
-        self.zoom_value_label = QtWidgets.QLabel(f"{self.zoom_slider.value()}°")
-        zoom_layout.addWidget(self.zoom_slider)
-        zoom_layout.addWidget(self.zoom_value_label)
-        left.addLayout(zoom_layout)
-        
         self.info = QtWidgets.QLabel("")
         self.info.setWordWrap(True)
         left.addWidget(self.info)
@@ -115,8 +89,6 @@ class MainWindow(QtWidgets.QWidget):
         
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
-        self.sphere_view_btn.clicked.connect(self.on_sphere_view)
-        self.ground_view_btn.clicked.connect(self.on_ground_view)
     
     def _build_scene(self):
         """Build 3D scene objects"""
@@ -158,39 +130,8 @@ class MainWindow(QtWidgets.QWidget):
         self.gc_dot = self.scene_builder.build_galactic_center_dot()
         self.view.addItem(self.gc_dot)
         
-        # Ground plane
-        self._build_ground_plane()
-        
         # Compass directions (N, S, E, W)
         self._build_compass_markers()
-    
-    def _build_ground_plane(self):
-        """Create a large green ground plane for ground view"""
-        size = 10.0
-        
-        verts = np.array([
-            [-size, -size, 0.0],
-            [ size, -size, 0.0],
-            [ size,  size, 0.0],
-            [-size,  size, 0.0],
-        ], dtype=np.float32)
-        
-        faces = np.array([
-            [0, 1, 2],
-            [0, 2, 3],
-        ], dtype=np.int32)
-        
-        ground_md = gl.MeshData(vertexes=verts, faces=faces)
-        self.ground_plane = gl.GLMeshItem(
-            meshdata=ground_md,
-            smooth=False,
-            drawEdges=False,
-            shader="shaded"
-        )
-        self.ground_plane.setColor((0.2, 0.5, 0.2, 1.0))
-        self.ground_plane.setGLOptions("opaque")
-        self.ground_plane.setVisible(False)
-        self.view.addItem(self.ground_plane)
     
     def _build_compass_markers(self):
         """Create compass direction markers (N, S, E, W) on horizon"""
@@ -198,7 +139,6 @@ class MainWindow(QtWidgets.QWidget):
         
         for direction in ['N', 'S', 'E', 'W']:
             marker_size = 0.02
-            from geometry.mesh_generation import make_uv_sphere
             verts, faces, _ = make_uv_sphere(marker_size, n_lon=16, n_lat=8)
             md = gl.MeshData(vertexes=verts, faces=faces)
             marker = gl.GLMeshItem(meshdata=md, smooth=True, drawEdges=False, shader="shaded")
@@ -216,9 +156,9 @@ class MainWindow(QtWidgets.QWidget):
             self.view.addItem(marker)
             self.compass_markers[direction] = marker
     
-    def _init_view_modes(self):
-        """Initialize view mode controllers"""
-        # Create scene items dictionary for view modes
+    def _init_view_mode(self):
+        """Initialize view mode controller"""
+        # Create scene items dictionary for view mode
         self.scene_items = {
             'sky': self.sky_item,
             'earth': self.earth_item,
@@ -230,25 +170,16 @@ class MainWindow(QtWidgets.QWidget):
             'sun_dot': self.sun_dot,
             'earth_axis': self.earth_axis_item,
             'gc_dot': self.gc_dot,
-            'ground_plane': self.ground_plane,
             'compass_markers': self.compass_markers
         }
         
-        # Initialize view mode controllers
+        # Initialize globe view controller
         self.globe_view = GlobeView(
             self.view, 
             self.scene_items, 
             self.radius, 
             self.earth_radius
         )
-        
-        self.ground_view = GroundView(
-            self.view, 
-            self.scene_items, 
-            self.radius, 
-            self.earth_radius
-        )
-        self.ground_view.set_fov(90.0)
     
     def on_now(self):
         """Set time to current"""
@@ -273,27 +204,6 @@ class MainWindow(QtWidgets.QWidget):
             self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
         self.update_scene()
-        
-        # Refresh current view
-        if self.current_view_mode == "ground":
-            self.on_ground_view()
-    
-    def on_zoom_changed(self, value):
-        """Handle zoom slider changes"""
-        self.zoom_value_label.setText(f"{value}°")
-        self.ground_view.set_fov(float(value))
-    
-    def on_sphere_view(self):
-        """Switch to sphere/globe view"""
-        self.current_view_mode = "sphere"
-        self.globe_view.activate()
-    
-    def on_ground_view(self):
-        """Switch to ground view"""
-        self.current_view_mode = "ground"
-        dt_utc_naive = self.dt_utc.replace(tzinfo=None)
-        gmst = gmst_degrees(dt_utc_naive)
-        self.ground_view.activate(self.lat, self.lon, gmst, EARTH_ROT_SIGN)
     
     def update_scene(self):
         """Update scene for current time and location"""
@@ -303,19 +213,11 @@ class MainWindow(QtWidgets.QWidget):
         lst = (gmst + self.lon) % 360.0
         
         # Update globe view elements
-        if self.current_view_mode == "sphere":
-            Rearth, p_view = self.globe_view.update_scene(
-                self.lat, self.lon, gmst, EARTH_ROT_SIGN
-            )
-        else:
-            # For ground view, we still need Rearth for celestial objects
-            from geometry.transformations import rotz_deg
-            Rearth = rotz_deg(EARTH_ROT_SIGN * gmst)
-            from astronomy.coordinates import latlon_to_ecef
-            p_ecef = latlon_to_ecef(self.lat, self.lon, self.earth_radius)
-            p_view = (Rearth @ p_ecef).astype(np.float32)
+        Rearth, p_view = self.globe_view.update_scene(
+            self.lat, self.lon, gmst, EARTH_ROT_SIGN
+        )
         
-        # Update celestial objects (visible in both views)
+        # Update celestial objects
         self._update_celestial_objects(dt_utc_naive, lst)
         
         # Update info display
