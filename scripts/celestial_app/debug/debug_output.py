@@ -1,7 +1,9 @@
+
 """
 Debug output module for celestial sphere calculations
 """
 import numpy as np
+from geometry.transformations import normalize_vector
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -40,8 +42,8 @@ def dot_rows(M: np.ndarray) -> tuple[float, float, float]:
 
 def angular_sep_deg(u: np.ndarray, v: np.ndarray) -> float:
     """Calculate angular separation in degrees between two unit vectors"""
-    u = u / (np.linalg.norm(u) + 1e-12)
-    v = v / (np.linalg.norm(v) + 1e-12)
+    u = normalize_vector(u)
+    v = normalize_vector(v)
     return float(np.rad2deg(np.arccos(np.clip(np.dot(u, v), -1.0, 1.0))))
 
 def print_celestial_debug(dt_local, dt_utc, lat, lon, jd, gmst, lst, 
@@ -57,13 +59,13 @@ def print_celestial_debug(dt_local, dt_utc, lat, lon, jd, gmst, lst,
     
     E2G = eq_to_gal_matrix_j2000()
     g = (E2G @ sun_eq.reshape(3, 1)).ravel()
-    g = g / (np.linalg.norm(g) + 1e-12)
+    g = normalize_vector(g)
     b_gal = np.rad2deg(np.arcsin(np.clip(g[2], -1.0, 1.0)))
     l_gal = np.rad2deg(np.arctan2(g[1], g[0])) % 360.0
     
     # GC sanity checks
     gc_gal = (E2G @ gc_eq.reshape(3, 1)).ravel()
-    gc_gal = gc_gal / (np.linalg.norm(gc_gal) + 1e-12)
+    gc_gal = normalize_vector(gc_gal)
     gc_l = np.rad2deg(np.arctan2(gc_gal[1], gc_gal[0])) % 360.0
     gc_b = np.rad2deg(np.arcsin(np.clip(gc_gal[2], -1.0, 1.0)))
     
@@ -75,11 +77,11 @@ def print_celestial_debug(dt_local, dt_utc, lat, lon, jd, gmst, lst,
     gc_sep_scp = angular_sep_deg(gc_eq, scp)
     gc_sep_ncp = angular_sep_deg(gc_eq, ncp)
     gc_local = (M @ gc_eq.reshape(3, 1)).ravel().astype(np.float32)
-    gc_local = gc_local / (np.linalg.norm(gc_local) + 1e-12)
+    gc_local = normalize_vector(gc_local)
     gc_alt, gc_az = unit_vector_enu_to_alt_az(gc_local)
     
     mw_dirs_eq = mw_pts_eq / (radius + 1e-12)
-    dots = np.clip(mw_dirs_eq @ (gc_eq / (np.linalg.norm(gc_eq) + 1e-12)), -1.0, 1.0)
+    dots = np.clip(mw_dirs_eq @ (normalize_vector(gc_eq)), -1.0, 1.0)
     min_sep = float(np.rad2deg(np.arccos(float(np.max(dots)))))
     
     print("\n" + "="*60)
@@ -157,7 +159,7 @@ def print_sun_debug(lat, lon, dt_local, dt_utc, app_tz):
     M = equatorial_to_local_enu_matrix(lat, lst).astype(np.float32)
     sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
     sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
-    sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
+    sun_local = normalize_vector(sun_local)
     alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
     alt_formula, az_formula = alt_az_from_ra_dec(lat, lst, sun_ra, sun_dec)
     ha = (lst - sun_ra) % 360.0
@@ -199,7 +201,7 @@ def find_max_alt_over_24h(lat_deg, lon_deg, start_local, step_minutes=4):
         lst = (gmst + lon_deg) % 360.0
         M = equatorial_to_local_enu_matrix(lat_deg, lst).astype(np.float32)
         v_loc = (M @ v_gc.reshape(3, 1)).ravel().astype(np.float32)
-        v_loc = v_loc / (np.linalg.norm(v_loc) + 1e-12)
+        v_loc = normalize_vector(v_loc)
         alt, az = unit_vector_enu_to_alt_az(v_loc)
         if best_alt is None or alt > best_alt:
             best_alt = alt
@@ -214,3 +216,4 @@ def print_gc_visibility(lat, lon, dt_local, app_tz):
     print(f"  Maximum altitude: {best_alt:.6f}°")
     print(f"  At time: {best_time.strftime('%Y-%m-%d %H:%M:%S')} {app_tz.key}")
     print(f"  Azimuth: {best_az:.6f}°")
+

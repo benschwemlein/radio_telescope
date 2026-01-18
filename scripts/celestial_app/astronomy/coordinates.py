@@ -1,4 +1,6 @@
+
 import numpy as np
+from geometry.transformations import normalize_vector
 
 def ra_dec_to_unit_vector_equatorial(ra_deg: float, dec_deg: float) -> np.ndarray:
     """Convert RA/Dec to unit vector in equatorial coordinates"""
@@ -93,3 +95,42 @@ def clamp_lat_lon(lat_deg: float, lon_deg: float) -> tuple[float, float]:
     lat = max(-90.0, min(90.0, float(lat_deg)))
     lon = ((float(lon_deg) + 180.0) % 360.0) - 180.0
     return lat, lon
+
+def ra_dec_to_alt_az_complete(ra_deg: float, dec_deg: float, 
+                               lat_deg: float, lst_deg: float) -> tuple[float, float]:
+    """
+    Complete conversion from equatorial to horizontal coordinates.
+    
+    Args:
+        ra_deg: Right ascension in degrees
+        dec_deg: Declination in degrees
+        lat_deg: Observer latitude in degrees
+        lst_deg: Local sidereal time in degrees
+    
+    Returns:
+        (altitude, azimuth) tuple in degrees
+    """
+    eq_vec = ra_dec_to_unit_vector_equatorial(ra_deg, dec_deg)
+    M = equatorial_to_local_enu_matrix(lat_deg, lst_deg)
+    local_vec = normalize_vector((M @ eq_vec.reshape(3, 1)).ravel().astype(np.float32))
+    return unit_vector_enu_to_alt_az(local_vec)
+
+def ra_dec_to_local_vector(ra_deg: float, dec_deg: float,
+                           lat_deg: float, lst_deg: float) -> np.ndarray:
+    """
+    Convert RA/Dec to local ENU unit vector.
+    
+    Args:
+        ra_deg: Right ascension in degrees
+        dec_deg: Declination in degrees
+        lat_deg: Observer latitude in degrees
+        lst_deg: Local sidereal time in degrees
+    
+    Returns:
+        Local ENU unit vector
+    """
+    eq_vec = ra_dec_to_unit_vector_equatorial(ra_deg, dec_deg)
+    M = equatorial_to_local_enu_matrix(lat_deg, lst_deg)
+    local_vec = (M @ eq_vec.reshape(3, 1)).ravel().astype(np.float32)
+    return normalize_vector(local_vec)
+

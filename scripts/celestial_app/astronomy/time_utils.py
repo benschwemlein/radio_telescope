@@ -1,3 +1,4 @@
+
 from datetime import datetime
 import numpy as np
 
@@ -25,3 +26,52 @@ def gmst_degrees(dt_utc_naive: datetime) -> float:
         - (T * T * T) / 38710000.0
     )
     return float(gmst % 360.0)
+
+def local_sidereal_time(dt_utc, longitude_deg: float) -> float:
+    """
+    Calculate Local Sidereal Time for a given UTC datetime and longitude.
+    
+    Args:
+        dt_utc: datetime object (timezone-aware or naive UTC)
+        longitude_deg: Observer longitude in degrees (East positive)
+    
+    Returns:
+        Local sidereal time in degrees
+    """
+    # Remove timezone info if present
+    if hasattr(dt_utc, 'tzinfo') and dt_utc.tzinfo is not None:
+        dt_naive = dt_utc.replace(tzinfo=None)
+    else:
+        dt_naive = dt_utc
+    
+    gmst = gmst_degrees(dt_naive)
+    lst = (gmst + longitude_deg) % 360.0
+    return float(lst)
+
+def astronomical_time_components(dt_utc, longitude_deg: float) -> dict:
+    """
+    Get all astronomical time components at once.
+    
+    Args:
+        dt_utc: datetime object (timezone-aware or naive UTC)
+        longitude_deg: Observer longitude in degrees
+    
+    Returns:
+        Dictionary with keys: 'jd', 'gmst', 'lst'
+    """
+    # Remove timezone info if present
+    if hasattr(dt_utc, 'tzinfo') and dt_utc.tzinfo is not None:
+        dt_naive = dt_utc.replace(tzinfo=None)
+    else:
+        dt_naive = dt_utc
+    
+    jd = julian_day(dt_naive)
+    gmst = gmst_degrees(dt_naive)
+    lst = (gmst + longitude_deg) % 360.0
+    
+    return {
+        'jd': float(jd),
+        'gmst': float(gmst),
+        'lst': float(lst)
+    }
+

@@ -1,9 +1,11 @@
+
 """
 Milky Way Renderer - Utility class for accurate Milky Way band structure
 Uses real all-sky Milky Way imagery and transforms it to observer's view
 Can be used by both 3D globe view and 2D star chart
 """
 import numpy as np
+from geometry.transformations import normalize_vector
 from typing import Tuple
 from PIL import Image
 
@@ -128,7 +130,7 @@ class MilkyWayRenderer:
             
             # Convert to equatorial coordinates
             eq_vec = self._galactic_to_equatorial(gal_vec)
-            eq_vec = self.radius * eq_vec / (np.linalg.norm(eq_vec) + 1e-12)
+            eq_vec = self.radius * normalize_vector(eq_vec)
             
             points_list.append(eq_vec)
             brightness_list.append(brightness)
@@ -232,7 +234,7 @@ class MilkyWayRenderer:
         ], dtype=np.float32)
         
         eq_vec = R @ gal_vec
-        return eq_vec / (np.linalg.norm(eq_vec) + 1e-12)
+        return normalize_vector(eq_vec)
     
     def _equatorial_to_galactic(self, eq_vec: np.ndarray) -> np.ndarray:
         """
@@ -253,7 +255,7 @@ class MilkyWayRenderer:
         ], dtype=np.float32)
         
         gal_vec = R @ eq_vec
-        return gal_vec / (np.linalg.norm(gal_vec) + 1e-12)
+        return normalize_vector(gal_vec)
     
     def _get_width_factor(self, galactic_longitude_deg: float) -> float:
         """
@@ -377,7 +379,7 @@ class MilkyWayRenderer:
         ], dtype=np.float32)
         
         eq_vec = R @ gal_vec
-        return eq_vec / (np.linalg.norm(eq_vec) + 1e-12)
+        return normalize_vector(eq_vec)
     
     def generate_solid_band_edges(self, density: int = 360) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -451,3 +453,4 @@ class MilkyWayRenderer:
         Dark lanes are caused by interstellar dust that absorbs starlight,
         most prominent in the Great Rift near Cygnus.
         """
+

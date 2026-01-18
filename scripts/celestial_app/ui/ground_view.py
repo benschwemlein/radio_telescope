@@ -1,3 +1,4 @@
+
 """
 Ground View Mode - Simple ground and sky only
 """
@@ -99,3 +100,4 @@ class GroundView:
     def update_for_time_change(self, lat, lon, gmst, earth_rot_sign=1.0):
         """Update when time changes"""
         self.activate(lat, lon, gmst, earth_rot_sign)
+

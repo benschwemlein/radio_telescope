@@ -1,3 +1,4 @@
+
 import numpy as np
 from .coordinates import gal_to_eq_matrix_j2000
 
@@ -38,3 +39,4 @@ def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=3
     P = np.concatenate(pts, axis=0).astype(np.float32)
     A = np.concatenate(alpha, axis=0).astype(np.float32)
     return P, A
+

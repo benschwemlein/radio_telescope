@@ -1,13 +1,16 @@
+
 """
 Star Chart View - Flat 2D projection of the sky as seen from observer's location
 Similar to a planisphere or star finder that can be printed
 """
 import numpy as np
+from geometry.transformations import normalize_vector
 from PyQt6 import QtWidgets, QtGui, QtCore
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Wedge
+from ui.theme import ColorTheme
 from astronomy.coordinates import (
     equatorial_to_local_enu_matrix,
     unit_vector_enu_to_alt_az,
@@ -226,15 +229,20 @@ class StarChartView(QtWidgets.QWidget):
         self.print_btn.clicked.connect(self.save_chart)
         self.invert_btn.clicked.connect(self.toggle_colors)
         
-        # Color scheme
+        # Color scheme using theme manager
         self.inverted = False
-        self.bg_color = '#0a0a0e'
-        self.fg_color = 'white'
-        self.grid_color = '#404050'
+        self._apply_theme()
         
         # Initialize the axes
         self.ax = self.figure.add_subplot(111, projection='polar')
         self._setup_axes()
+    
+    def _apply_theme(self):
+        """Apply color theme based on inverted state"""
+        theme = ColorTheme.get_theme(dark_mode=not self.inverted)
+        self.bg_color = theme['bg_color']
+        self.fg_color = theme['fg_color']
+        self.grid_color = theme['grid_color']
     
     def _setup_axes(self):
         """Setup polar axes for sky projection"""
@@ -254,9 +262,9 @@ class StarChartView(QtWidgets.QWidget):
         self.ax.set_yticks([0, 30, 60, 90])
         self.ax.set_yticklabels(['90°', '60°', '30°', '0°'], color=self.fg_color, fontsize=10)
         
-        # Azimuth ticks (labels handled by _add_compass_rose)
+        # Azimuth labels (N, E, S, W)
         self.ax.set_xticks(np.deg2rad([0, 90, 180, 270]))
-        self.ax.set_xticklabels([])  # Empty labels - custom compass rose adds them
+        self.ax.set_xticklabels(['N', 'E', 'S', 'W'], color=self.fg_color, fontsize=14, weight='bold')
         
         self.ax.spines['polar'].set_color(self.fg_color)
         self.ax.tick_params(colors=self.fg_color)
@@ -350,7 +358,7 @@ class StarChartView(QtWidgets.QWidget):
                 # Transform to equatorial coordinates (inverse of M)
                 M_inv = np.linalg.inv(M)
                 eq_vec = (M_inv @ local_vec).astype(np.float32)
-                eq_vec = eq_vec / (np.linalg.norm(eq_vec) + 1e-12)
+                eq_vec = normalize_vector(eq_vec)
                 
                 # Convert equatorial to galactic coordinates
                 gal_vec = self.milky_way_renderer._equatorial_to_galactic(eq_vec)
@@ -394,7 +402,7 @@ class StarChartView(QtWidgets.QWidget):
             
             # Transform to local coords
             star_local = (M @ star_eq).astype(np.float32)
-            star_local = star_local / (np.linalg.norm(star_local) + 1e-12)
+            star_local = normalize_vector(star_local)
             
             # Convert to alt/az
             alt, az = unit_vector_enu_to_alt_az(star_local)
@@ -446,7 +454,7 @@ class StarChartView(QtWidgets.QWidget):
                 
                 # Transform to local coords
                 star_local = (M @ star_eq).astype(np.float32)
-                star_local = star_local / (np.linalg.norm(star_local) + 1e-12)
+                star_local = normalize_vector(star_local)
                 
                 # Convert to alt/az
                 alt, az = unit_vector_enu_to_alt_az(star_local)
@@ -475,8 +483,8 @@ class StarChartView(QtWidgets.QWidget):
                 star1_local = (M @ star1_eq).astype(np.float32)
                 star2_local = (M @ star2_eq).astype(np.float32)
                 
-                star1_local = star1_local / (np.linalg.norm(star1_local) + 1e-12)
-                star2_local = star2_local / (np.linalg.norm(star2_local) + 1e-12)
+                star1_local = normalize_vector(star1_local)
+                star2_local = normalize_vector(star2_local)
                 
                 # Convert to alt/az
                 alt1, az1 = unit_vector_enu_to_alt_az(star1_local)
@@ -506,7 +514,7 @@ class StarChartView(QtWidgets.QWidget):
         for ra in ra_points:
             eq_vec = ra_dec_to_unit_vector_equatorial(ra, dec)
             local_vec = (M @ eq_vec).astype(np.float32)
-            local_vec = local_vec / (np.linalg.norm(local_vec) + 1e-12)
+            local_vec = normalize_vector(local_vec)
             alt, az = unit_vector_enu_to_alt_az(local_vec)
             
             if alt > 0:  # Only plot if above horizon
@@ -523,7 +531,7 @@ class StarChartView(QtWidgets.QWidget):
         sun_ra, sun_dec = sun_ra_dec_degrees(dt_utc)
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
         sun_local = (M @ sun_eq).astype(np.float32)
-        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
+        sun_local = normalize_vector(sun_local)
         alt, az = unit_vector_enu_to_alt_az(sun_local)
         
         if alt > 0:  # Only plot if above horizon
@@ -539,7 +547,7 @@ class StarChartView(QtWidgets.QWidget):
         """Plot the Galactic Center"""
         gc_eq = galactic_center_unit_eq()
         gc_local = (M @ gc_eq).astype(np.float32)
-        gc_local = gc_local / (np.linalg.norm(gc_local) + 1e-12)
+        gc_local = normalize_vector(gc_local)
         alt, az = unit_vector_enu_to_alt_az(gc_local)
         
         if alt > 0:  # Only plot if above horizon
@@ -559,18 +567,16 @@ class StarChartView(QtWidgets.QWidget):
         }
         
         for label, azimuth in directions.items():
-            if len(label) == 2:  # Intermediate directions smaller and farther out
+            if len(label) == 2:  # Intermediate directions smaller
                 fontsize = 8
                 color = self.fg_color
                 alpha = 0.5
-                radius = 97  # Place intermediate directions farther from center
             else:  # Cardinal directions
                 fontsize = 10
                 color = '#ff6060' if label == 'N' else self.fg_color
                 alpha = 0.8
-                radius = 95  # Cardinal directions closer
             
-            self.ax.text(np.deg2rad(azimuth), radius, label,
+            self.ax.text(np.deg2rad(azimuth), 95, label,
                         ha='center', va='center',
                         fontsize=fontsize, color=color, 
                         alpha=alpha, weight='bold')
@@ -578,16 +584,7 @@ class StarChartView(QtWidgets.QWidget):
     def toggle_colors(self):
         """Toggle between dark and light color scheme for printing"""
         self.inverted = not self.inverted
-        
-        if self.inverted:
-            self.bg_color = 'white'
-            self.fg_color = 'black'
-            self.grid_color = '#c0c0c0'
-        else:
-            self.bg_color = '#0a0a0e'
-            self.fg_color = 'white'
-            self.grid_color = '#404050'
-        
+        self._apply_theme()
         self.figure.set_facecolor(self.bg_color)
         # Trigger a redraw by calling update_chart from parent
         # (parent will need to call this)
@@ -609,3 +606,4 @@ class StarChartView(QtWidgets.QWidget):
                 "Saved",
                 f"Star chart saved to:\n{filename}"
             )
+

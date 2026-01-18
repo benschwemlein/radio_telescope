@@ -1,3 +1,4 @@
+
 import numpy as np
 import pyqtgraph.opengl as gl
 from geometry.mesh_generation import (
@@ -136,3 +137,4 @@ class SceneBuilder:
         )
         self._sky_options(item, 999997)
         return item
+

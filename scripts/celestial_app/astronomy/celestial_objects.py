@@ -1,3 +1,4 @@
+
 from datetime import datetime
 import numpy as np
 from .time_utils import julian_day
@@ -23,3 +24,4 @@ def galactic_center_unit_eq() -> np.ndarray:
     """Get unit vector to galactic center in equatorial coordinates"""
     # J2000 galactic center approx: RA 266.4051 deg, Dec -28.936175 deg
     return ra_dec_to_unit_vector_equatorial(266.4051, -28.936175)
+

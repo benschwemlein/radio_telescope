@@ -1,3 +1,4 @@
+
 import sys
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -19,7 +20,7 @@ from astronomy.coordinates import (
 )
 from astronomy.celestial_objects import sun_ra_dec_degrees, galactic_center_unit_eq
 from geometry.mesh_generation import make_disk_mesh, make_uv_sphere
-from geometry.transformations import rotz_deg
+from geometry.transformations import normalize_vector, rotz_deg
 import pyqtgraph.opengl as gl
 
 # Import view modes
@@ -253,7 +254,7 @@ class MainWindow(QtWidgets.QWidget):
         sun_eq = ra_dec_to_unit_vector_equatorial(sun_ra, sun_dec)
         M = equatorial_to_local_enu_matrix(self.lat, lst)
         sun_local = (M @ sun_eq.reshape(3, 1)).ravel().astype(np.float32)
-        sun_local = sun_local / (np.linalg.norm(sun_local) + 1e-12)
+        sun_local = normalize_vector(sun_local)
         alt_vec, az_vec = unit_vector_enu_to_alt_az(sun_local)
         
         self.info.setText(
@@ -303,3 +304,4 @@ class MainWindow(QtWidgets.QWidget):
         gc_eq = galactic_center_unit_eq()
         gc_pos = (self.radius * gc_eq).astype(np.float32)
         self.gc_dot.setData(pos=gc_pos.reshape(1, 3))
+

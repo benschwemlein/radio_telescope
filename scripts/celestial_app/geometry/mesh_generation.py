@@ -1,3 +1,4 @@
+
 import os
 import numpy as np
 import requests
@@ -87,3 +88,4 @@ def make_disk_mesh(center: np.ndarray, normal: np.ndarray, radius: float, segmen
         faces.append([0, k, k + 1])
     faces = np.array(faces, dtype=np.int32)
     return gl.MeshData(vertexes=verts, faces=faces)
+

@@ -1,3 +1,4 @@
+
 """
 Globe View Mode - External view of celestial sphere with Earth
 """
@@ -103,3 +104,4 @@ class GlobeView:
         self.items['eq'].setData(pos=eq)
         
         return Rearth, p_view
+
