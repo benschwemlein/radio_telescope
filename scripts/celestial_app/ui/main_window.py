@@ -384,23 +384,27 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg.exec()
 
     def _on_suggestion_accepted(self, scan_data: dict):
-        """Save a suggested scan to the database and visualise it."""
-        scan_id = self.scan_db.add_scan(
-            name=scan_data['name'],
-            altitude=scan_data['altitude'],
-            azimuth=scan_data['azimuth'],
-            duration_seconds=scan_data['duration_seconds'],
-            resolution=scan_data['resolution'],
-            start_time=scan_data['start_time'],
-            notes=scan_data['notes'],
-        )
-        self._add_scan_visualization(scan_data)
-        self.update_all_views()
-        QtWidgets.QMessageBox.information(
-            self,
-            "Scan Saved",
-            f"Scan '{scan_data['name']}' has been saved."
-        )
+        """Open the scan entry dialog pre-filled with the suggested values."""
+        dialog = ScanEntryDialog(self)
+        dialog.prefill(scan_data)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            confirmed = dialog.get_scan_data()
+            self.scan_db.add_scan(
+                name=confirmed['name'],
+                altitude=confirmed['altitude'],
+                azimuth=confirmed['azimuth'],
+                duration_seconds=confirmed['duration_seconds'],
+                resolution=confirmed['resolution'],
+                start_time=confirmed['start_time'],
+                notes=confirmed['notes'],
+            )
+            self._add_scan_visualization(confirmed)
+            self.update_all_views()
+            QtWidgets.QMessageBox.information(
+                self,
+                "Scan Saved",
+                f"Scan '{confirmed['name']}' has been saved."
+            )
 
     def _on_new_scan(self):
         """Handle new scan menu action."""

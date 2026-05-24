@@ -196,6 +196,35 @@ class ScanEntryDialog(QtWidgets.QDialog):
         
         return True, ""
     
+    def prefill(self, data: dict):
+        """Pre-populate the form from a dictionary (e.g. from the scan suggester).
+
+        Keys accepted: name, altitude, azimuth, duration_seconds, resolution,
+                       start_time (naive datetime), notes.
+        """
+        if 'name' in data:
+            self.name_edit.setText(data['name'])
+        if 'altitude' in data:
+            self.altitude_spin.setValue(float(data['altitude']))
+        if 'azimuth' in data:
+            self.azimuth_spin.setValue(float(data['azimuth']))
+        if 'duration_seconds' in data:
+            secs = int(data['duration_seconds'])
+            self.hours_spin.setValue(secs // 3600)
+            self.minutes_spin.setValue((secs % 3600) // 60)
+            self.seconds_spin.setValue(secs % 60)
+        if 'resolution' in data:
+            self.resolution_spin.setValue(float(data['resolution']))
+        if 'start_time' in data:
+            dt: datetime = data['start_time']
+            qdt = QtCore.QDateTime(
+                QtCore.QDate(dt.year, dt.month, dt.day),
+                QtCore.QTime(dt.hour, dt.minute, dt.second),
+            )
+            self.start_datetime.setDateTime(qdt)
+        if 'notes' in data:
+            self.notes_edit.setPlainText(data['notes'])
+
     def accept(self):
         """Override accept to validate before closing."""
         is_valid, error_msg = self.validate_input()
