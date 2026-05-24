@@ -376,7 +376,59 @@ class MainWindow(QtWidgets.QMainWindow):
         radio_menu.addAction(manage_action)
     
     def _on_suggest_scan(self):
-        """Compute and display optimal drift-scan suggestions."""
+        """Show a time-preference dialog, then compute and display scan suggestions."""
+
+        # --- Pre-flight: ask for the observer's preferred waking hours ---
+        pref_dlg = QtWidgets.QDialog(self)
+        pref_dlg.setWindowTitle("Observation Window")
+        pref_dlg.setMinimumWidth(340)
+        pref_layout = QtWidgets.QVBoxLayout(pref_dlg)
+
+        pref_layout.addWidget(QtWidgets.QLabel(
+            "Preferred observation window (local time):\n"
+            "Scans with peak inside this window are ranked first.\n"
+            "Out-of-window scans still appear at the bottom."
+        ))
+
+        time_row = QtWidgets.QHBoxLayout()
+        time_row.addWidget(QtWidgets.QLabel("From"))
+
+        from_spin = QtWidgets.QSpinBox()
+        from_spin.setRange(0, 23)
+        from_spin.setValue(7)          # default 7 am
+        from_spin.setSuffix(":00")
+        time_row.addWidget(from_spin)
+
+        time_row.addWidget(QtWidgets.QLabel("to"))
+
+        to_spin = QtWidgets.QSpinBox()
+        to_spin.setRange(1, 24)
+        to_spin.setValue(23)           # default 11 pm
+        to_spin.setSuffix(":00")
+        time_row.addWidget(to_spin)
+        time_row.addStretch()
+        pref_layout.addLayout(time_row)
+
+        pref_layout.addSpacing(8)
+
+        pref_btn_row = QtWidgets.QHBoxLayout()
+        pref_btn_row.addStretch()
+        find_btn = QtWidgets.QPushButton("Find Scans")
+        find_btn.setDefault(True)
+        find_btn.clicked.connect(pref_dlg.accept)
+        pref_btn_row.addWidget(find_btn)
+        cancel_btn = QtWidgets.QPushButton("Cancel")
+        cancel_btn.clicked.connect(pref_dlg.reject)
+        pref_btn_row.addWidget(cancel_btn)
+        pref_layout.addLayout(pref_btn_row)
+
+        if pref_dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        earliest_hour = float(from_spin.value())
+        latest_hour   = float(to_spin.value())
+
+        # --- Compute suggestions ---
         dt_utc_naive = self.dt_utc.replace(tzinfo=None)
 
         suggestions = suggest_scans(
@@ -387,6 +439,8 @@ class MainWindow(QtWidgets.QMainWindow):
             min_alt_deg=20.0,
             lookahead_hours=24.0,
             beam_width_deg=5.0,
+            earliest_local_hour=earliest_hour,
+            latest_local_hour=latest_hour,
         )
 
         if not suggestions:
@@ -399,7 +453,11 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             return
 
-        dlg = ScanSuggestionDialog(suggestions, parent=self)
+        dlg = ScanSuggestionDialog(
+            suggestions,
+            preferred_hours=(int(earliest_hour), int(latest_hour)),
+            parent=self,
+        )
         dlg.scan_accepted.connect(self._on_suggestion_accepted)
         dlg.exec()
 

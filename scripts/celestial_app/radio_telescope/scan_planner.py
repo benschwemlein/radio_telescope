@@ -12,6 +12,8 @@ are visible from the observer's location and scores each by:
   - Transit altitude (higher = less atmosphere = better signal)
   - Crossing geometry (angle of the galactic plane to the RA sweep direction)
   - Hours until the crossing (sooner = more immediately useful)
+  - Whether the peak time falls within the caller's preferred waking hours
+    (in-window scans score 6.7× higher than out-of-window ones)
 """
 
 from __future__ import annotations
@@ -82,6 +84,7 @@ class ScanSuggestion:
     brightness: float            # 0-1, brightness at this galactic longitude
     score: float                 # overall quality score (higher = better)
     hours_until_start: float
+    in_preferred_window: bool = True  # peak time falls within user's waking hours
 
     @property
     def total_duration_min(self) -> float:
@@ -109,23 +112,32 @@ def suggest_scans(
     min_alt_deg: float = 20.0,
     lookahead_hours: float = 24.0,
     beam_width_deg: float = 5.0,
-    max_results: int = 5,
+    max_results: int = 8,
+    earliest_local_hour: float = 0.0,
+    latest_local_hour: float = 24.0,
 ) -> list[ScanSuggestion]:
     """
     Find the best drift-scan opportunities across the Milky Way.
 
     Args:
-        lat_deg:          Observer latitude in degrees (North positive).
-        lon_deg:          Observer longitude in degrees (East positive).
-        dt_utc_naive:     Current UTC time (naive datetime).
-        local_tz:         tzinfo for output times (None = UTC).
-        min_alt_deg:      Minimum acceptable transit altitude in degrees.
-        lookahead_hours:  Search window in hours from now.
-        beam_width_deg:   Telescope beam FWHM in degrees (affects duration).
-        max_results:      Maximum number of suggestions to return.
+        lat_deg:              Observer latitude in degrees (North positive).
+        lon_deg:              Observer longitude in degrees (East positive).
+        dt_utc_naive:         Current UTC time (naive datetime).
+        local_tz:             tzinfo for output times (None = UTC).
+        min_alt_deg:          Minimum acceptable transit altitude in degrees.
+        lookahead_hours:      Search window in hours from now.
+        beam_width_deg:       Telescope beam FWHM in degrees (affects duration).
+        max_results:          Maximum number of suggestions to return.
+        earliest_local_hour:  Preferred start of waking hours (0–23, local time).
+                              Scans whose PEAK falls within [earliest, latest)
+                              are scored ~6.7× higher than out-of-window ones.
+                              Default 0 means no preference applied.
+        latest_local_hour:    Preferred end of waking hours (1–24, local time).
+                              Default 24 means no preference applied.
 
     Returns:
-        List of ScanSuggestion objects sorted best-first.
+        List of ScanSuggestion objects sorted best-first.  ``in_preferred_window``
+        is True for scans whose peak time falls inside the preferred hours.
     """
     R_g2e = gal_to_eq_matrix_j2000().astype(np.float64)
     R_e2g = eq_to_gal_matrix_j2000().astype(np.float64)
@@ -215,7 +227,48 @@ def suggest_scans(
     time_score = 1.0 - hours_to_transit / (lookahead_hours + 1)
     dur_score  = np.exp(-crossing_min / 90.0)           # prefer ~30-90 min crossings
 
-    score = bright_arr * alt_score * (0.6 + 0.4 * time_score) * (0.7 + 0.3 * dur_score)
+    # Preferred waking-hours window
+    # Compute the local hour of each scan's PEAK as a float 0–24.
+    has_window = (
+        local_tz is not None
+        and not (earliest_local_hour == 0.0 and latest_local_hour == 24.0)
+    )
+    if has_window:
+        try:
+            utc_offset_h = (
+                dt_utc_naive.replace(tzinfo=timezone.utc)
+                .astimezone(local_tz)
+                .utcoffset()
+                .total_seconds()
+                / 3600.0
+            )
+        except Exception:
+            utc_offset_h = 0.0
+        # Peak time local hour (float, 0–24)
+        peak_local_h = (
+            dt_utc_naive.hour + dt_utc_naive.minute / 60.0
+            + hours_to_transit + utc_offset_h
+        ) % 24.0
+
+        if earliest_local_hour <= latest_local_hour:
+            # Normal window e.g. 07:00–23:00
+            in_window = (
+                (peak_local_h >= earliest_local_hour)
+                & (peak_local_h < latest_local_hour)
+            )
+        else:
+            # Overnight window e.g. 22:00–06:00
+            in_window = (
+                (peak_local_h >= earliest_local_hour)
+                | (peak_local_h < latest_local_hour)
+            )
+        # In-window scans get a strong boost; out-of-window are kept but ranked low
+        waking_score = np.where(in_window, 1.0, 0.15)
+    else:
+        in_window    = np.ones(n_samples, dtype=bool)
+        waking_score = np.ones(n_samples)
+
+    score = bright_arr * alt_score * waking_score * (0.6 + 0.4 * time_score) * (0.7 + 0.3 * dur_score)
 
     # Only consider masked candidates
     indices = np.where(mask)[0]
@@ -264,6 +317,7 @@ def suggest_scans(
             brightness            = round(float(bright_arr[idx]), 2),
             score                 = round(float(score[idx]), 4),
             hours_until_start     = round(max(0.0, h - float(crossing_min[idx]) / 120.0 - b_h), 2),
+            in_preferred_window   = bool(in_window[idx]),
         ))
 
     return picked

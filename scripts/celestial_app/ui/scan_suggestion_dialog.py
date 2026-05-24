@@ -19,12 +19,19 @@ class ScanSuggestionDialog(QtWidgets.QDialog):
     # Emitted when the user picks a suggestion to act on
     scan_accepted = QtCore.pyqtSignal(dict)
 
-    def __init__(self, suggestions: list[ScanSuggestion], parent=None):
+    def __init__(
+        self,
+        suggestions: list[ScanSuggestion],
+        preferred_hours: tuple[int, int] | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Suggested Milky Way Drift Scans")
-        self.setMinimumWidth(720)
+        self.setMinimumWidth(760)
         self.setMinimumHeight(480)
         self.suggestions = suggestions
+        # (earliest_hour, latest_hour) for the header label; None = no filter applied
+        self._preferred_hours = preferred_hours
         self._build_ui()
         if suggestions:
             self.table.selectRow(0)
@@ -48,13 +55,23 @@ class ScanSuggestionDialog(QtWidgets.QDialog):
         info.setWordWrap(True)
         info.setStyleSheet("padding: 6px; background: #1a2030; border-radius: 4px;")
         root.addWidget(info)
+
+        # Show the active preferred-hours window
+        if self._preferred_hours:
+            e, l = self._preferred_hours
+            window_label = QtWidgets.QLabel(
+                f"⏰  Preferred window: {e:02d}:00 – {l:02d}:00 local  "
+                f"(✓ = in window, — = outside window)"
+            )
+            window_label.setStyleSheet("padding: 4px; color: #a0c8ff;")
+            root.addWidget(window_label)
         root.addSpacing(8)
 
         # --- Results table ---
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
-            "Region", "Alt", "Az", "Start", "MW Peak", "End",
+            "Window", "Region", "Alt", "Az", "Start", "MW Peak", "End",
             "MW crossing", "Brightness",
         ])
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
@@ -107,24 +124,33 @@ class ScanSuggestionDialog(QtWidgets.QDialog):
                 return item
 
             time_fmt = "%H:%M"
-            self.table.setItem(row, 0, cell(s.galactic_region,
+
+            # Column 0: preferred-window indicator
+            if s.in_preferred_window:
+                win_item = cell("✓")
+                win_item.setForeground(QtGui.QColor("#60e060"))   # green
+            else:
+                win_item = cell("—")
+                win_item.setForeground(QtGui.QColor("#808080"))   # grey
+            self.table.setItem(row, 0, win_item)
+
+            self.table.setItem(row, 1, cell(s.galactic_region,
                                             QtCore.Qt.AlignmentFlag.AlignLeft))
-            self.table.setItem(row, 1, cell(f"{s.altitude_deg:.0f}°"))
-            self.table.setItem(row, 2, cell(f"{s.azimuth_deg:.0f}°  "
+            self.table.setItem(row, 2, cell(f"{s.altitude_deg:.0f}°"))
+            self.table.setItem(row, 3, cell(f"{s.azimuth_deg:.0f}°  "
                                              f"({'S' if s.azimuth_deg == 180 else 'N'})"))
-            self.table.setItem(row, 3, cell(s.start_time.strftime(time_fmt)))
-            self.table.setItem(row, 4, cell(s.peak_time.strftime(time_fmt)))
-            self.table.setItem(row, 5, cell(s.end_time.strftime(time_fmt)))
-            self.table.setItem(row, 6, cell(f"{s.crossing_duration_min:.0f} min"))
+            self.table.setItem(row, 4, cell(s.start_time.strftime(time_fmt)))
+            self.table.setItem(row, 5, cell(s.peak_time.strftime(time_fmt)))
+            self.table.setItem(row, 6, cell(s.end_time.strftime(time_fmt)))
+            self.table.setItem(row, 7, cell(f"{s.crossing_duration_min:.0f} min"))
 
             # Colour-coded brightness bar
             pct = int(s.brightness * 100)
             bright_item = cell(f"{pct}%")
-            # Green → orange → red depending on brightness (higher = better)
             r = max(0, int(255 * (1 - s.brightness)))
             g = max(0, int(255 * s.brightness))
             bright_item.setBackground(QtGui.QColor(r // 2, g // 2, 0))
-            self.table.setItem(row, 7, bright_item)
+            self.table.setItem(row, 8, bright_item)
 
     # ------------------------------------------------------------------
     # Slots
