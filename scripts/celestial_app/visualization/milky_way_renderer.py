@@ -4,10 +4,13 @@ Milky Way Renderer - Utility class for accurate Milky Way band structure
 Uses real all-sky Milky Way imagery and transforms it to observer's view
 Can be used by both 3D globe view and 2D star chart
 """
+import logging
 import numpy as np
 from geometry.transformations import normalize_vector
 from typing import Tuple
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 class MilkyWayRenderer:
     """
@@ -15,7 +18,7 @@ class MilkyWayRenderer:
     Transforms the image to equatorial coordinates for accurate sky display.
     """
     
-    def __init__(self, radius: float = 1.0, image_path: str = None):
+    def __init__(self, radius: float = 1.0, image_path: str | None = None):
         """
         Initialize Milky Way renderer
         
@@ -29,13 +32,13 @@ class MilkyWayRenderer:
         if image_path:
             self.load_milky_way_image(image_path)
     
-    def load_milky_way_image(self, image_path: str):
+    def load_milky_way_image(self, image_path: str) -> None:
         """Load the Milky Way background image"""
         try:
             self.milky_way_image = Image.open(image_path).convert('L')  # Grayscale
-            print(f"Loaded Milky Way image: {self.milky_way_image.size}")
+            logger.info("Loaded Milky Way image: %s", self.milky_way_image.size)
         except Exception as e:
-            print(f"Could not load Milky Way image: {e}")
+            logger.warning("Could not load Milky Way image: %s", e)
             self.milky_way_image = None
     
     def sample_milky_way_at_galactic_coords(self, l_deg: float, b_deg: float) -> float:

@@ -2,7 +2,13 @@
 import numpy as np
 from .coordinates import gal_to_eq_matrix_j2000
 
-def build_milky_way_band_equatorial(radius=1.0, half_width_deg=10.0, n=1600, m=33, seed=7):
+def build_milky_way_band_equatorial(
+    radius: float = 1.0,
+    half_width_deg: float = 10.0,
+    n: int = 1600,
+    m: int = 33,
+    seed: int = 7,
+) -> tuple[np.ndarray, np.ndarray]:
     """Generate Milky Way band points in equatorial coordinates"""
     rng = np.random.default_rng(seed)
     R_g2e = gal_to_eq_matrix_j2000()

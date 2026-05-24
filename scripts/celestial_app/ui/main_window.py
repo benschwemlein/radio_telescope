@@ -228,20 +228,28 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def on_apply(self):
         """Apply user inputs"""
+        errors = []
         try:
             lat = float(self.lat_edit.text().strip())
             lon = float(self.lon_edit.text().strip())
-            lat, lon = clamp_lat_lon(lat, lon)
-            self.lat = lat
-            self.lon = lon
-        except Exception:
-            pass
+            self.lat, self.lon = clamp_lat_lon(lat, lon)
+        except ValueError:
+            errors.append("lat/lon must be numbers")
+
         try:
             dt = datetime.strptime(self.time_edit.text().strip(), "%Y-%m-%d %H:%M:%S")
             self.dt_local = dt.replace(tzinfo=APP_TZ)
-        except Exception:
+        except ValueError:
+            errors.append("time must be YYYY-MM-DD HH:MM:SS (reset to now)")
             self.dt_local = datetime.now(APP_TZ)
+            self.time_edit.setText(self.dt_local.strftime("%Y-%m-%d %H:%M:%S"))
+
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
+
+        if errors:
+            self.info.setText("Input error: " + "; ".join(errors))
+            return
+
         self.update_all_views()
     
     def on_tab_changed(self, index):

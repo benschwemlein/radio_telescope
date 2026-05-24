@@ -2,10 +2,13 @@
 Star Chart View - Flat 2D projection of the sky as seen from observer's location
 Similar to a planisphere or star finder that can be printed
 """
+import logging
 import numpy as np
 from datetime import datetime
 from geometry.transformations import normalize_vector
 from PyQt6 import QtWidgets, QtGui, QtCore
+
+logger = logging.getLogger(__name__)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
@@ -205,7 +208,7 @@ class StarChartView(QtWidgets.QWidget):
         try:
             self.milky_way_renderer.load_milky_way_image('gal_background.jpg')
         except Exception as e:
-            print(f"Could not load Milky Way background image: {e}")
+            logger.warning("Could not load Milky Way background image: %s", e)
         
         # Create matplotlib figure
         self.figure = Figure(figsize=(10, 10), facecolor='#0a0a0e')

@@ -12,7 +12,7 @@ from geometry.mesh_generation import make_ring
 class GlobeView:
     """Handles globe/sphere view mode - external view of celestial sphere"""
     
-    def __init__(self, view_widget, scene_items, radius=1.0, earth_radius=0.36):
+    def __init__(self, view_widget, scene_items: dict, radius: float = 1.0, earth_radius: float = 0.36):
         """
         Initialize globe view
         
@@ -65,7 +65,7 @@ class GlobeView:
         self.view.opts['fov'] = self.default_fov
         self.view.update()
     
-    def update_scene(self, lat, lon, gmst, earth_rot_sign=1.0):
+    def update_scene(self, lat: float, lon: float, gmst: float, earth_rot_sign: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
         """
         Update scene elements for current time and location
         

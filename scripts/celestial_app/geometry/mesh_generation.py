@@ -1,9 +1,12 @@
 
+import logging
 import os
 import numpy as np
 import requests
 from PIL import Image
 import pyqtgraph.opengl as gl
+
+logger = logging.getLogger(__name__)
 
 def make_uv_sphere(radius: float, n_lon: int, n_lat: int):
     """Generate UV sphere mesh"""
@@ -40,16 +43,34 @@ def sample_texture(texture_rgb: np.ndarray, uv: np.ndarray) -> np.ndarray:
     colors = texture_rgb[y, x].astype(np.float32) / 255.0
     return colors
 
+def _fallback_texture() -> np.ndarray:
+    tex = np.zeros((512, 1024, 3), dtype=np.uint8)
+    tex[:, :, 1] = 40
+    tex[:, :, 2] = 70
+    return tex
+
 def get_earth_texture(path="earth_texture.jpg") -> np.ndarray:
-    """Download and load Earth texture"""
+    """Load Earth texture from disk, downloading from NASA on first run.
+
+    Returns a plain dark-blue fallback array if the download fails.
+    """
     if os.path.exists(path):
-        return np.asarray(Image.open(path).convert("RGB"))
+        try:
+            return np.asarray(Image.open(path).convert("RGB"))
+        except Exception as e:
+            logger.warning("Failed to load cached texture %s: %s", path, e)
+
     url = "https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/57730/land_ocean_ice_2048.png"
-    r = requests.get(url, timeout=25)
-    r.raise_for_status()
-    with open(path, "wb") as f:
-        f.write(r.content)
-    return np.asarray(Image.open(path).convert("RGB"))
+    try:
+        logger.info("Downloading Earth texture from NASA (may take ~25s)...")
+        r = requests.get(url, timeout=25)
+        r.raise_for_status()
+        with open(path, "wb") as f:
+            f.write(r.content)
+        return np.asarray(Image.open(path).convert("RGB"))
+    except Exception as e:
+        logger.warning("Could not download Earth texture: %s — using fallback.", e)
+        return _fallback_texture()
 
 def make_ring(radius: float, n: int, plane="xy") -> np.ndarray:
     """Generate ring of points"""
