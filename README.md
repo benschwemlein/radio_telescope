@@ -75,4 +75,4 @@ Coordinate systems used:
 
 ## Hardware setup
 
-See `setup.txt` for detailed RTL-SDR hardware setup, `rtl_power` scanning commands, and Raspberry Pi configuration.
+See [SETUP.md](SETUP.md) for detailed RTL-SDR hardware setup, `rtl_power` scanning commands, and Raspberry Pi configuration.
