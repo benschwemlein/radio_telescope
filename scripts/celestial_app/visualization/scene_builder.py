@@ -83,10 +83,12 @@ class SceneBuilder:
     def build_milky_way(self) -> tuple[gl.GLScatterPlotItem, np.ndarray, np.ndarray]:
         """Create Milky Way band"""
         mw_pts, mw_a = build_milky_way_band_equatorial(
-            self.radius, half_width_deg=10.0, n=1600, m=33, seed=7
+            self.radius, half_width_deg=15.0, n=1800, m=40, seed=7
         )
         mw_cols = np.ones((mw_pts.shape[0], 4), dtype=np.float32)
-        mw_cols[:, 3] = 0.08 + 0.75 * np.clip(mw_a, 0.0, 1.0)
+        # Scale alpha so dim regions (anticenter) are very faint and the
+        # galactic-center / Cygnus regions are clearly brighter.
+        mw_cols[:, 3] = 0.04 + 0.82 * np.clip(mw_a, 0.0, 1.0)
         item = gl.GLScatterPlotItem(pos=mw_pts, size=2.0, color=mw_cols, pxMode=True)
         self._sky_options(item, 999999)
         return item, mw_pts, mw_cols
