@@ -25,11 +25,13 @@ import pyqtgraph.opengl as gl
 # Import view modes
 from .globe_view import GlobeView
 from .star_chart_view import StarChartView
+from .scan_suggestion_dialog import ScanSuggestionDialog
 
 # Radio Telescope imports
 from database import ScanDatabase
 from ui.scan_dialog import ScanEntryDialog
 from radio_telescope import ScanPath
+from radio_telescope.scan_planner import suggest_scans
 
 APP_TZ = ZoneInfo("America/New_York")
 EARTH_ROT_SIGN = 1.0
@@ -343,10 +345,63 @@ class MainWindow(QtWidgets.QMainWindow):
         # Radio Telescope menu
         radio_menu = menubar.addMenu("Radio Telescope")
         
+        suggest_action = QtGui.QAction("Suggest Optimal Scan...", self)
+        suggest_action.triggered.connect(self._on_suggest_scan)
+        radio_menu.addAction(suggest_action)
+
+        radio_menu.addSeparator()
+
         new_scan_action = QtGui.QAction("New Scan...", self)
         new_scan_action.triggered.connect(self._on_new_scan)
         radio_menu.addAction(new_scan_action)
     
+    def _on_suggest_scan(self):
+        """Compute and display optimal drift-scan suggestions."""
+        dt_utc_naive = self.dt_utc.replace(tzinfo=None)
+
+        suggestions = suggest_scans(
+            lat_deg=self.lat,
+            lon_deg=self.lon,
+            dt_utc_naive=dt_utc_naive,
+            local_tz=APP_TZ,
+            min_alt_deg=20.0,
+            lookahead_hours=24.0,
+            beam_width_deg=5.0,
+        )
+
+        if not suggestions:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No Suggestions",
+                "No observable Milky Way crossings found in the next 24 hours\n"
+                "from your current location and time.\n\n"
+                "Try adjusting the date or lowering the minimum altitude."
+            )
+            return
+
+        dlg = ScanSuggestionDialog(suggestions, parent=self)
+        dlg.scan_accepted.connect(self._on_suggestion_accepted)
+        dlg.exec()
+
+    def _on_suggestion_accepted(self, scan_data: dict):
+        """Save a suggested scan to the database and visualise it."""
+        scan_id = self.scan_db.add_scan(
+            name=scan_data['name'],
+            altitude=scan_data['altitude'],
+            azimuth=scan_data['azimuth'],
+            duration_seconds=scan_data['duration_seconds'],
+            resolution=scan_data['resolution'],
+            start_time=scan_data['start_time'],
+            notes=scan_data['notes'],
+        )
+        self._add_scan_visualization(scan_data)
+        self.update_all_views()
+        QtWidgets.QMessageBox.information(
+            self,
+            "Scan Saved",
+            f"Scan '{scan_data['name']}' has been saved."
+        )
+
     def _on_new_scan(self):
         """Handle new scan menu action."""
         dialog = ScanEntryDialog(self)
