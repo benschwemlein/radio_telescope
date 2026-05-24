@@ -327,10 +327,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_all_views()
     
     def _on_lookup_address(self):
-        """Geocode the address field using Nominatim (OpenStreetMap) and
-        fill in the latitude / longitude fields, then apply."""
-        import urllib.request
-        import urllib.parse
+        """Geocode the address field and fill in lat/lon, then apply."""
+        from utils.geocode import lookup_address
 
         address = self.addr_edit.text().strip()
         if not address:
@@ -342,44 +340,12 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.processEvents()
 
         try:
-            import ssl
-
-            # macOS ships Python without bundled CA certs; prefer certifi when
-            # available, otherwise fall back to an unverified context.
-            # Nominatim (openstreetmap.org) is a well-known trusted server, so
-            # skipping verification here is acceptable for a hobby app.
-            try:
-                import certifi
-                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
-            except ImportError:
-                ssl_ctx = ssl._create_unverified_context()
-
-            url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode({
-                "q": address,
-                "format": "json",
-                "limit": 1,
-            })
-            req = urllib.request.Request(url, headers={
-                # Nominatim requires a descriptive User-Agent
-                "User-Agent": "RadioTelescopePlanner/1.0 (personal hobby project)"
-            })
-            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
-                results = json.loads(resp.read().decode())
-
-            if not results:
-                self.info.setText(f'Address not found: "{address}"')
-                return
-
-            lat = float(results[0]["lat"])
-            lon = float(results[0]["lon"])
-            place = results[0].get("display_name", address)
-
-            self.lat_edit.setText(f"{lat:.6f}")
-            self.lon_edit.setText(f"{lon:.6f}")
-            # Show the first ~70 chars of the resolved place name
-            self.info.setText(f"📍 {place[:70]}{'…' if len(place) > 70 else ''}")
+            loc = lookup_address(address)
+            self.lat_edit.setText(f"{loc.lat:.6f}")
+            self.lon_edit.setText(f"{loc.lon:.6f}")
+            name = loc.display_name
+            self.info.setText(f"📍 {name[:70]}{'…' if len(name) > 70 else ''}")
             self.on_apply()
-
         except Exception as exc:
             _log.warning("Address lookup failed: %s", exc)
             self.info.setText(f"Lookup failed: {exc}")
