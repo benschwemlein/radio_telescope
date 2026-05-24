@@ -476,7 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 glOptions="translucent"
             )
             # Red semi-transparent
-            mesh_item.setColor((1.0, 0.0, 0.0, 0.3))
+            mesh_item.setColor((1.0, 0.45, 0.45, 0.35))
             
             self.view.addItem(mesh_item)
             self.scan_mesh_items.append(mesh_item)
