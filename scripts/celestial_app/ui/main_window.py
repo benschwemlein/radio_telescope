@@ -26,6 +26,7 @@ import pyqtgraph.opengl as gl
 from .globe_view import GlobeView
 from .star_chart_view import StarChartView
 from .scan_suggestion_dialog import ScanSuggestionDialog
+from .scan_manager_dialog import ScanManagerDialog
 
 # Radio Telescope imports
 from database import ScanDatabase
@@ -54,8 +55,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Radio Telescope: Initialize database and scan storage
         self.scan_db = ScanDatabase()
-        self.scan_paths = []
-        self.scan_mesh_items = []
+        # Each entry: {'id': int, 'data': dict, 'path': ScanPath, 'mesh': GLMeshItem|None}
+        self.scan_items: list = []
         
         # Create central widget for QMainWindow
         central_widget = QtWidgets.QWidget()
@@ -130,6 +131,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.apply_btn.clicked.connect(self.on_apply)
         self.now_btn.clicked.connect(self.on_now)
         self.tabs.currentChanged.connect(self.on_tab_changed)
+        self.view.scene_clicked.connect(self._on_globe_clicked)
     
     def _build_scene(self):
         """Build 3D scene objects"""
@@ -222,6 +224,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.earth_radius
         )
     
+    # ------------------------------------------------------------------
+    # Timezone helpers
+    # All scan times are stored in the DB as naive UTC.  These helpers
+    # convert to/from APP_TZ (America/New_York) for dialog display.
+    # ------------------------------------------------------------------
+
+    def _utc_to_local(self, dt: datetime) -> datetime:
+        """Naive UTC → naive APP_TZ local (for displaying to the user)."""
+        return dt.replace(tzinfo=timezone.utc).astimezone(APP_TZ).replace(tzinfo=None)
+
+    def _local_to_utc(self, dt: datetime) -> datetime:
+        """Naive APP_TZ local → naive UTC (for storing in DB / ScanPath)."""
+        return dt.replace(tzinfo=APP_TZ).astimezone(timezone.utc).replace(tzinfo=None)
+
     def on_now(self):
         """Set time to current"""
         self.dt_local = datetime.now(APP_TZ)
@@ -275,7 +291,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_celestial_objects(dt_utc_naive, lst)
         
         # Pass scan paths to star chart
-        self.star_chart.set_scan_paths(self.scan_paths)
+        self.star_chart.set_scan_paths([item['path'] for item in self.scan_items])
         
         # Update 2D star chart
         self.star_chart.update_chart(
@@ -354,6 +370,10 @@ class MainWindow(QtWidgets.QMainWindow):
         new_scan_action = QtGui.QAction("New Scan...", self)
         new_scan_action.triggered.connect(self._on_new_scan)
         radio_menu.addAction(new_scan_action)
+
+        manage_action = QtGui.QAction("Manage Scans...", self)
+        manage_action.triggered.connect(self._on_manage_scans)
+        radio_menu.addAction(manage_action)
     
     def _on_suggest_scan(self):
         """Compute and display optimal drift-scan suggestions."""
@@ -386,10 +406,20 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_suggestion_accepted(self, scan_data: dict):
         """Open the scan entry dialog pre-filled with the suggested values."""
         dialog = ScanEntryDialog(self)
-        dialog.prefill(scan_data)
+
+        # scan_data['start_time'] is UTC naive (from ScanSuggestionDialog).
+        # Convert to local for a user-friendly display in the dialog.
+        display_data = dict(scan_data)
+        if display_data.get('start_time'):
+            display_data['start_time'] = self._utc_to_local(display_data['start_time'])
+        dialog.prefill(display_data)
+
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             confirmed = dialog.get_scan_data()
-            self.scan_db.add_scan(
+            # Dialog returns naive local time → convert back to UTC for DB / ScanPath
+            if confirmed.get('start_time'):
+                confirmed['start_time'] = self._local_to_utc(confirmed['start_time'])
+            scan_id = self.scan_db.add_scan(
                 name=confirmed['name'],
                 altitude=confirmed['altitude'],
                 azimuth=confirmed['azimuth'],
@@ -398,7 +428,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 start_time=confirmed['start_time'],
                 notes=confirmed['notes'],
             )
-            self._add_scan_visualization(confirmed)
+            self._add_scan_visualization(confirmed, scan_id)
             self.update_all_views()
             QtWidgets.QMessageBox.information(
                 self,
@@ -409,10 +439,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_new_scan(self):
         """Handle new scan menu action."""
         dialog = ScanEntryDialog(self)
-        
+
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             scan_data = dialog.get_scan_data()
-            
+
+            # Dialog returns naive local time (America/New_York).
+            # Convert to UTC before storing in DB and passing to ScanPath.
+            if scan_data.get('start_time'):
+                scan_data['start_time'] = self._local_to_utc(scan_data['start_time'])
+
             # Save to database
             scan_id = self.scan_db.add_scan(
                 name=scan_data['name'],
@@ -425,7 +460,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             
             # Create scan path and visualize
-            self._add_scan_visualization(scan_data)
+            self._add_scan_visualization(scan_data, scan_id)
             
             # Refresh views
             self.update_all_views()
@@ -439,18 +474,18 @@ class MainWindow(QtWidgets.QMainWindow):
     def _load_scans(self):
         """Load all scans from database and create visualizations."""
         scans = self.scan_db.get_all_scans()
-        
         for scan_data in scans:
-            self._add_scan_visualization(scan_data)
+            self._add_scan_visualization(scan_data, scan_data['id'])
     
-    def _add_scan_visualization(self, scan_data):
+    def _add_scan_visualization(self, scan_data: dict, scan_id: int):
         """
-        Create and add scan path visualization.
-        
+        Create a ScanPath, build a 3D mesh, and register everything in
+        ``self.scan_items`` so the entry can later be edited or deleted.
+
         Args:
-            scan_data: Dictionary with scan parameters
+            scan_data: Dictionary with scan parameters (altitude, azimuth, …)
+            scan_id:   Database primary key for this scan
         """
-        # Create ScanPath object
         scan_path = ScanPath(
             altitude=scan_data['altitude'],
             azimuth=scan_data['azimuth'],
@@ -460,13 +495,20 @@ class MainWindow(QtWidgets.QMainWindow):
             latitude=self.lat,
             longitude=self.lon
         )
-        
-        self.scan_paths.append(scan_path)
-        
-        # Create 3D mesh for globe view
+
+        entry: dict = {
+            'id':       scan_id,
+            'data':     scan_data,
+            'path':     scan_path,
+            'mesh':     None,
+            'centroid': None,   # 3-D world-space centroid used for click picking
+        }
+
+        # Build 3D mesh for the globe view
         vertices, faces = scan_path.get_band_mesh_3d(radius=self.radius, segments=16)
-        
         if len(vertices) > 0 and len(faces) > 0:
+            entry['centroid'] = vertices.mean(axis=0).astype(np.float32)
+
             md = gl.MeshData(vertexes=vertices, faces=faces)
             mesh_item = gl.GLMeshItem(
                 meshdata=md,
@@ -475,8 +517,230 @@ class MainWindow(QtWidgets.QMainWindow):
                 shader="shaded",
                 glOptions="translucent"
             )
-            # Red semi-transparent
-            mesh_item.setColor((1.0, 0.45, 0.45, 0.35))
-            
+            mesh_item.setColor((1.0, 0.45, 0.45, 0.35))  # salmon, semi-transparent
             self.view.addItem(mesh_item)
-            self.scan_mesh_items.append(mesh_item)
+            entry['mesh'] = mesh_item
+
+        self.scan_items.append(entry)
+
+    # ------------------------------------------------------------------
+    # Scan management handlers
+    # ------------------------------------------------------------------
+
+    def _on_manage_scans(self):
+        """Open the Manage Scans dialog."""
+        if not self.scan_items:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No Scans",
+                "There are no saved scans yet.\n"
+                "Use Radio Telescope → New Scan… to add one."
+            )
+            return
+
+        dlg = ScanManagerDialog(self.scan_items, local_tz=APP_TZ, parent=self)
+        dlg.scan_edited.connect(self._on_scan_edited)
+        dlg.scan_deleted.connect(self._on_scan_deleted)
+        dlg.exec()
+
+    def _on_scan_edited(self, scan_id: int, new_data: dict):
+        """Slot connected to ScanManagerDialog.scan_edited."""
+        self._apply_scan_edit(scan_id, new_data)
+
+    def _apply_scan_edit(self, scan_id: int, new_data: dict):
+        """
+        Persist edits to the DB, rebuild the 3D mesh, and update the entry
+        in place so any open ScanManagerDialog table row stays valid.
+
+        ``new_data['start_time']`` is expected to be a naive local (APP_TZ)
+        datetime as returned by ScanEntryDialog.get_scan_data().  It is
+        converted to UTC here before being stored.
+        """
+        entry = next((it for it in self.scan_items if it['id'] == scan_id), None)
+        if entry is None:
+            return
+
+        # Work with a copy so we don't mutate the caller's dict
+        data_utc = dict(new_data)
+        if data_utc.get('start_time'):
+            data_utc['start_time'] = self._local_to_utc(data_utc['start_time'])
+
+        # Persist to DB (UTC)
+        self.scan_db.update_scan(
+            scan_id,
+            name=data_utc['name'],
+            altitude=data_utc['altitude'],
+            azimuth=data_utc['azimuth'],
+            duration_seconds=data_utc['duration_seconds'],
+            resolution=data_utc['resolution'],
+            start_time=data_utc['start_time'],
+            notes=data_utc['notes'],
+        )
+
+        # Remove old mesh from scene
+        if entry['mesh'] is not None:
+            self.view.removeItem(entry['mesh'])
+
+        # Rebuild ScanPath and mesh with UTC start_time
+        scan_path = ScanPath(
+            altitude=data_utc['altitude'],
+            azimuth=data_utc['azimuth'],
+            duration_seconds=data_utc['duration_seconds'],
+            resolution=data_utc['resolution'],
+            start_time=data_utc['start_time'],
+            latitude=self.lat,
+            longitude=self.lon
+        )
+
+        new_mesh = None
+        new_centroid = None
+        vertices, faces = scan_path.get_band_mesh_3d(radius=self.radius, segments=16)
+        if len(vertices) > 0 and len(faces) > 0:
+            new_centroid = vertices.mean(axis=0).astype(np.float32)
+            md = gl.MeshData(vertexes=vertices, faces=faces)
+            new_mesh = gl.GLMeshItem(
+                meshdata=md,
+                smooth=True,
+                drawEdges=False,
+                shader="shaded",
+                glOptions="translucent"
+            )
+            new_mesh.setColor((1.0, 0.45, 0.45, 0.35))
+            self.view.addItem(new_mesh)
+
+        # Update the entry in place (the dialog still holds a reference to it).
+        # Store UTC so any subsequent prefill can convert correctly.
+        entry['data']     = data_utc
+        entry['path']     = scan_path
+        entry['mesh']     = new_mesh
+        entry['centroid'] = new_centroid
+
+        self.update_all_views()
+
+    def _on_scan_deleted(self, scan_id: int):
+        """
+        Handle a deletion confirmed in ScanManagerDialog.
+        Removes the scan from the DB, the 3D scene, and ``scan_items``.
+        """
+        self._apply_scan_delete(scan_id)
+
+    # ------------------------------------------------------------------
+    # Shared edit / delete logic (used by both the manager dialog and the
+    # 3-D globe click handler)
+    # ------------------------------------------------------------------
+
+    def _apply_scan_delete(self, scan_id: int):
+        """Remove a scan from the DB, the 3D scene, and scan_items."""
+        entry = next((it for it in self.scan_items if it['id'] == scan_id), None)
+        if entry is None:
+            return
+        self.scan_db.delete_scan(scan_id)
+        if entry['mesh'] is not None:
+            self.view.removeItem(entry['mesh'])
+        self.scan_items.remove(entry)
+        self.update_all_views()
+
+    def _open_edit_dialog_for(self, scan_id: int):
+        """Open ScanEntryDialog pre-filled for the given scan_id.  On accept,
+        persist the changes and refresh the scene."""
+        entry = next((it for it in self.scan_items if it['id'] == scan_id), None)
+        if entry is None:
+            return
+        dialog = ScanEntryDialog(self)
+
+        # DB stores UTC; convert to local so the user sees a recognisable time
+        display_data = dict(entry['data'])
+        if display_data.get('start_time'):
+            display_data['start_time'] = self._utc_to_local(display_data['start_time'])
+        dialog.prefill(display_data)
+
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            new_data = dialog.get_scan_data()
+            # Dialog returns local time → _apply_scan_edit converts to UTC
+            self._apply_scan_edit(scan_id, new_data)
+
+    # ------------------------------------------------------------------
+    # 3-D globe click-to-pick
+    # ------------------------------------------------------------------
+
+    def _on_globe_clicked(self, screen_x: int, screen_y: int):
+        """
+        Called when the user clicks (no drag) anywhere in the 3-D view.
+        Projects every scan band's centroid to screen space and opens a
+        context menu for the nearest one within 50 px.
+        """
+        if not self.scan_items:
+            return
+
+        # We need to be on the 3D tab; ignore clicks on the star chart.
+        if self.tabs.currentIndex() != 0:
+            return
+
+        from PyQt6.QtGui import QVector4D
+
+        try:
+            P = self.view.projectionMatrix()
+            V = self.view.viewMatrix()
+        except Exception:
+            return          # pyqtgraph version doesn't expose these — bail out
+
+        PV = P * V
+        w = max(self.view.width(), 1)
+        h = max(self.view.height(), 1)
+
+        THRESHOLD_SQ = 50 * 50      # 50-pixel click radius
+
+        best_entry = None
+        best_dist_sq = THRESHOLD_SQ
+
+        for item in self.scan_items:
+            centroid = item.get('centroid')
+            if centroid is None:
+                continue
+            cx, cy, cz = float(centroid[0]), float(centroid[1]), float(centroid[2])
+            clip = PV.map(QVector4D(cx, cy, cz, 1.0))
+            if abs(clip.w()) < 1e-9:
+                continue
+            ndc_x = clip.x() / clip.w()
+            ndc_y = clip.y() / clip.w()
+            # NDC → pixel (OpenGL Y is bottom-up, Qt Y is top-down)
+            sx = (ndc_x + 1.0) / 2.0 * w
+            sy = (1.0 - ndc_y) / 2.0 * h
+            dx = sx - screen_x
+            dy = sy - screen_y
+            dist_sq = dx * dx + dy * dy
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_entry = item
+
+        if best_entry is None:
+            return
+
+        # Build a small context menu at the click position
+        from PyQt6.QtCore import QPoint
+        scan_name = best_entry['data'].get('name', 'Scan')
+
+        menu = QtWidgets.QMenu(self)
+
+        title_action = menu.addAction(f"📡  {scan_name}")
+        title_action.setEnabled(False)          # non-clickable label
+        menu.addSeparator()
+
+        edit_action   = menu.addAction("Edit Scan…")
+        delete_action = menu.addAction("Delete Scan")
+
+        global_pos = self.view.mapToGlobal(QPoint(screen_x, screen_y))
+        chosen = menu.exec(global_pos)
+
+        if chosen == edit_action:
+            self._open_edit_dialog_for(best_entry['id'])
+        elif chosen == delete_action:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Delete Scan",
+                f"Permanently delete scan '{scan_name}'?",
+                QtWidgets.QMessageBox.StandardButton.Yes |
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                self._apply_scan_delete(best_entry['id'])

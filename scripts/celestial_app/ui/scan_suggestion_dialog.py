@@ -4,6 +4,7 @@ user send one directly into the New Scan dialog.
 """
 from __future__ import annotations
 
+from datetime import timezone
 from PyQt6 import QtWidgets, QtCore, QtGui
 from radio_telescope.scan_planner import ScanSuggestion
 
@@ -170,13 +171,18 @@ class ScanSuggestionDialog(QtWidgets.QDialog):
         if not rows:
             return
         s = self.suggestions[rows[0].row()]
+        # Convert start_time to UTC naive so ScanPath computes GMST correctly.
+        # (s.start_time is aware/local; storing local-naive as UTC causes a
+        # timezone-offset RA error equal to the UTC offset, e.g. 60° for EDT.)
+        start_utc_naive = s.start_time.astimezone(timezone.utc).replace(tzinfo=None)
+
         self.scan_accepted.emit({
             'name': f"MW drift — {s.galactic_region}",
             'altitude': s.altitude_deg,
             'azimuth': s.azimuth_deg,
             'duration_seconds': s.total_duration_min * 60,
             'resolution': 5.0,   # default beam width
-            'start_time': s.start_time.replace(tzinfo=None),  # naive for DB
+            'start_time': start_utc_naive,  # UTC naive for DB / ScanPath
             'notes': (
                 f"Suggested drift scan across {s.galactic_region} "
                 f"(l={s.galactic_longitude_deg:.1f}°).  "

@@ -1,15 +1,44 @@
 
 import pyqtgraph.opengl as gl
 import numpy as np
+from PyQt6.QtCore import pyqtSignal, Qt
 from geometry.mesh_generation import make_uv_sphere
 
 class FixedGLViewWidget(gl.GLViewWidget):
-    """Custom GL view widget with fixed camera distance"""
-    
+    """Custom GL view widget with fixed camera distance.
+
+    Extra signal
+    ------------
+    scene_clicked(x, y)
+        Emitted on a left-button *click* (press + release without significant
+        drag, < 6 px movement).  ``x`` and ``y`` are widget-local pixel coords.
+    """
+
+    scene_clicked = pyqtSignal(int, int)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._press_pos = None
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = ev.position().toPoint()
+        super().mousePressEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton and self._press_pos is not None:
+            rel = ev.position().toPoint()
+            dx = rel.x() - self._press_pos.x()
+            dy = rel.y() - self._press_pos.y()
+            if dx * dx + dy * dy < 36:          # < 6 px movement → click
+                self.scene_clicked.emit(rel.x(), rel.y())
+        self._press_pos = None
+        super().mouseReleaseEvent(ev)
+
     def wheelEvent(self, ev):
         """Disable zoom via wheel or trackpad scroll"""
         ev.ignore()
-    
+
     def set_fixed_distance(self, d: float):
         """Set fixed camera distance"""
         self.opts["distance"] = float(d)
