@@ -1,6 +1,14 @@
+import json
+import logging
 import sys
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+_log = logging.getLogger(__name__)
+_CONFIG_FILE = Path.home() / ".radio_telescope" / "config.json"
+_DEFAULT_LAT =  40.040   # 700 White Tail Dr, Gahanna OH
+_DEFAULT_LON = -82.875
 import numpy as np
 from PyQt6 import QtWidgets, QtGui
 from PyQt6.QtCore import Qt
@@ -48,8 +56,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scene_builder = SceneBuilder(radius=1.0, earth_radius=0.36)
         self.radius = self.scene_builder.radius
         self.earth_radius = self.scene_builder.earth_radius
-        self.lat = 39.9612
-        self.lon = -82.9988
+        self.lat, self.lon = self._load_config()
         self.dt_local = datetime.now(APP_TZ)
         self.dt_utc = self.dt_local.astimezone(timezone.utc)
 
@@ -86,17 +93,31 @@ class MainWindow(QtWidgets.QMainWindow):
         left = QtWidgets.QVBoxLayout()
         layout.addLayout(left, 0)
         
-        self.lat_edit = QtWidgets.QLineEdit(str(self.lat))
-        self.lon_edit = QtWidgets.QLineEdit(str(self.lon))
+        # --- Address lookup ---
+        left.addWidget(QtWidgets.QLabel("Address / Place"))
+        addr_row = QtWidgets.QHBoxLayout()
+        self.addr_edit = QtWidgets.QLineEdit()
+        self.addr_edit.setPlaceholderText("e.g. 700 White Tail Dr, Gahanna OH")
+        addr_row.addWidget(self.addr_edit)
+        self.lookup_btn = QtWidgets.QPushButton("Look Up")
+        self.lookup_btn.clicked.connect(self._on_lookup_address)
+        addr_row.addWidget(self.lookup_btn)
+        left.addLayout(addr_row)
+
+        left.addSpacing(4)
+
+        # --- Coordinates ---
+        self.lat_edit = QtWidgets.QLineEdit(f"{self.lat:.6f}")
+        self.lon_edit = QtWidgets.QLineEdit(f"{self.lon:.6f}")
         self.time_edit = QtWidgets.QLineEdit(self.dt_local.strftime("%Y-%m-%d %H:%M:%S"))
-        
+
         left.addWidget(QtWidgets.QLabel("Latitude"))
         left.addWidget(self.lat_edit)
         left.addWidget(QtWidgets.QLabel("Longitude"))
         left.addWidget(self.lon_edit)
         left.addWidget(QtWidgets.QLabel("Date and time (America/New_York)"))
         left.addWidget(self.time_edit)
-        
+
         btn_row = QtWidgets.QHBoxLayout()
         self.apply_btn = QtWidgets.QPushButton("Apply")
         self.now_btn = QtWidgets.QPushButton("Now")
@@ -225,6 +246,39 @@ class MainWindow(QtWidgets.QMainWindow):
         )
     
     # ------------------------------------------------------------------
+    # Config persistence
+    # Saves/loads lat & lon so the location survives restarts.
+    # File: ~/.radio_telescope/config.json
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_config() -> tuple[float, float]:
+        """Return (lat, lon) from config file, or the Gahanna defaults."""
+        try:
+            text = _CONFIG_FILE.read_text()
+            data = json.loads(text)
+            lat = float(data["lat"])
+            lon = float(data["lon"])
+            _log.info("Loaded location from config: lat=%.4f lon=%.4f", lat, lon)
+            return lat, lon
+        except FileNotFoundError:
+            _log.info("No config file found; using default location.")
+        except Exception as exc:
+            _log.warning("Could not read config (%s); using default location.", exc)
+        return _DEFAULT_LAT, _DEFAULT_LON
+
+    def _save_config(self) -> None:
+        """Write current lat/lon to config file."""
+        try:
+            _CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _CONFIG_FILE.write_text(
+                json.dumps({"lat": self.lat, "lon": self.lon}, indent=2)
+            )
+            _log.info("Saved location to config: lat=%.4f lon=%.4f", self.lat, self.lon)
+        except Exception as exc:
+            _log.warning("Could not save config: %s", exc)
+
+    # ------------------------------------------------------------------
     # Timezone helpers
     # All scan times are stored in the DB as naive UTC.  These helpers
     # convert to/from APP_TZ (America/New_York) for dialog display.
@@ -268,8 +322,70 @@ class MainWindow(QtWidgets.QMainWindow):
             self.info.setText("Input error: " + "; ".join(errors))
             return
 
+        # Persist updated location so it survives restarts
+        self._save_config()
         self.update_all_views()
     
+    def _on_lookup_address(self):
+        """Geocode the address field using Nominatim (OpenStreetMap) and
+        fill in the latitude / longitude fields, then apply."""
+        import urllib.request
+        import urllib.parse
+
+        address = self.addr_edit.text().strip()
+        if not address:
+            self.info.setText("Enter an address above and click Look Up.")
+            return
+
+        self.lookup_btn.setEnabled(False)
+        self.info.setText("Looking up address…")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            import ssl
+
+            # macOS ships Python without bundled CA certs; prefer certifi when
+            # available, otherwise fall back to an unverified context.
+            # Nominatim (openstreetmap.org) is a well-known trusted server, so
+            # skipping verification here is acceptable for a hobby app.
+            try:
+                import certifi
+                ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                ssl_ctx = ssl._create_unverified_context()
+
+            url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode({
+                "q": address,
+                "format": "json",
+                "limit": 1,
+            })
+            req = urllib.request.Request(url, headers={
+                # Nominatim requires a descriptive User-Agent
+                "User-Agent": "RadioTelescopePlanner/1.0 (personal hobby project)"
+            })
+            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
+                results = json.loads(resp.read().decode())
+
+            if not results:
+                self.info.setText(f'Address not found: "{address}"')
+                return
+
+            lat = float(results[0]["lat"])
+            lon = float(results[0]["lon"])
+            place = results[0].get("display_name", address)
+
+            self.lat_edit.setText(f"{lat:.6f}")
+            self.lon_edit.setText(f"{lon:.6f}")
+            # Show the first ~70 chars of the resolved place name
+            self.info.setText(f"📍 {place[:70]}{'…' if len(place) > 70 else ''}")
+            self.on_apply()
+
+        except Exception as exc:
+            _log.warning("Address lookup failed: %s", exc)
+            self.info.setText(f"Lookup failed: {exc}")
+        finally:
+            self.lookup_btn.setEnabled(True)
+
     def on_tab_changed(self, index):
         """Handle tab changes"""
         # Refresh the current view when switching tabs
@@ -485,7 +601,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 resolution=confirmed['resolution'],
                 start_time=confirmed['start_time'],
                 notes=confirmed['notes'],
+                latitude=self.lat,
+                longitude=self.lon,
             )
+            confirmed['latitude'] = self.lat
+            confirmed['longitude'] = self.lon
             self._add_scan_visualization(confirmed, scan_id)
             self.update_all_views()
             QtWidgets.QMessageBox.information(
@@ -506,7 +626,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if scan_data.get('start_time'):
                 scan_data['start_time'] = self._local_to_utc(scan_data['start_time'])
 
-            # Save to database
+            # Save to database (include observer location)
             scan_id = self.scan_db.add_scan(
                 name=scan_data['name'],
                 altitude=scan_data['altitude'],
@@ -514,9 +634,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 duration_seconds=scan_data['duration_seconds'],
                 resolution=scan_data['resolution'],
                 start_time=scan_data['start_time'],
-                notes=scan_data['notes']
+                notes=scan_data['notes'],
+                latitude=self.lat,
+                longitude=self.lon,
             )
-            
+            scan_data['latitude'] = self.lat
+            scan_data['longitude'] = self.lon
+
             # Create scan path and visualize
             self._add_scan_visualization(scan_data, scan_id)
             
@@ -544,14 +668,19 @@ class MainWindow(QtWidgets.QMainWindow):
             scan_data: Dictionary with scan parameters (altitude, azimuth, …)
             scan_id:   Database primary key for this scan
         """
+        # Use the location stored with the scan; fall back to current app location
+        # for legacy scans that pre-date the latitude/longitude columns.
+        scan_lat = scan_data.get('latitude') or self.lat
+        scan_lon = scan_data.get('longitude') or self.lon
+
         scan_path = ScanPath(
             altitude=scan_data['altitude'],
             azimuth=scan_data['azimuth'],
             duration_seconds=scan_data['duration_seconds'],
             resolution=scan_data['resolution'],
             start_time=scan_data['start_time'],
-            latitude=self.lat,
-            longitude=self.lon
+            latitude=scan_lat,
+            longitude=scan_lon,
         )
 
         entry: dict = {
@@ -623,6 +752,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if data_utc.get('start_time'):
             data_utc['start_time'] = self._local_to_utc(data_utc['start_time'])
 
+        # Keep stored location or update to current if it was missing (legacy scan)
+        data_utc.setdefault('latitude', self.lat)
+        data_utc.setdefault('longitude', self.lon)
+
         # Persist to DB (UTC)
         self.scan_db.update_scan(
             scan_id,
@@ -633,21 +766,23 @@ class MainWindow(QtWidgets.QMainWindow):
             resolution=data_utc['resolution'],
             start_time=data_utc['start_time'],
             notes=data_utc['notes'],
+            latitude=data_utc['latitude'],
+            longitude=data_utc['longitude'],
         )
 
         # Remove old mesh from scene
         if entry['mesh'] is not None:
             self.view.removeItem(entry['mesh'])
 
-        # Rebuild ScanPath and mesh with UTC start_time
+        # Rebuild ScanPath using the location stored with the scan
         scan_path = ScanPath(
             altitude=data_utc['altitude'],
             azimuth=data_utc['azimuth'],
             duration_seconds=data_utc['duration_seconds'],
             resolution=data_utc['resolution'],
             start_time=data_utc['start_time'],
-            latitude=self.lat,
-            longitude=self.lon
+            latitude=data_utc['latitude'],
+            longitude=data_utc['longitude'],
         )
 
         new_mesh = None

@@ -216,6 +216,20 @@ Use **`rtl_power_fftw`** for hydrogen-line observations — it gives finer frequ
 
 ---
 
+## Observation Site — 700 White Tail Dr, Gahanna OH 43230
+
+| | |
+|---|---|
+| **Coordinates** | 40.040° N, -82.875° W |
+| **Galactic center max elevation** | ~21° (due south, summer) — likely blocked by trees/roofline |
+| **Cygnus arm elevation** | ~75° overhead — excellent target |
+| **Primary RFI concern** | John Glenn Airport (~2 mi) — DME/TACAN at 960–1215 MHz bleeds near 1420 MHz |
+| **Mitigation** | SAWbird+ H1 cavity filter handles this; prefer north/overhead pointings |
+
+The app is pre-configured with these coordinates.
+
+---
+
 ## Using the Celestial App for Scan Planning
 
 See [README.md](README.md) for installation and usage of the Python planning application.

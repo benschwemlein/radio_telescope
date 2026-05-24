@@ -28,7 +28,7 @@ class ScanDatabase:
         self._init_database()
     
     def _init_database(self):
-        """Create database tables if they don't exist."""
+        """Create database tables if they don't exist, and migrate older schemas."""
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS scans (
@@ -40,26 +40,38 @@ class ScanDatabase:
                     resolution REAL NOT NULL,
                     start_time TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    notes TEXT
+                    notes TEXT,
+                    latitude REAL,
+                    longitude REAL
                 )
             """)
+            # Migration: add columns to existing databases that pre-date this change
+            for col in ("latitude", "longitude"):
+                try:
+                    conn.execute(f"ALTER TABLE scans ADD COLUMN {col} REAL")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
             conn.commit()
     
     def add_scan(self, name: str, altitude: float, azimuth: float,
                  duration_seconds: float, resolution: float,
-                 start_time: datetime, notes: str = "") -> int:
+                 start_time: datetime, notes: str = "",
+                 latitude: Optional[float] = None,
+                 longitude: Optional[float] = None) -> int:
         """
         Add a new scan to the database.
-        
+
         Args:
             name: Scan identifier/name
             altitude: Telescope altitude angle in degrees (0-90)
             azimuth: Telescope azimuth angle in degrees (0-360)
             duration_seconds: Scan duration in seconds
             resolution: Telescope beam width in degrees
-            start_time: Scan start time as datetime object
+            start_time: Scan start time as datetime object (UTC naive)
             notes: Optional notes about the scan
-        
+            latitude: Observer latitude in degrees (stored with scan)
+            longitude: Observer longitude in degrees (stored with scan)
+
         Returns:
             ID of the newly created scan
         """
@@ -70,10 +82,11 @@ class ScanDatabase:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO scans (name, altitude, azimuth, duration_seconds,
-                                 resolution, start_time, created_at, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                 resolution, start_time, created_at, notes,
+                                 latitude, longitude)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (name, altitude, azimuth, duration_seconds, resolution,
-                  start_time_str, created_at, notes))
+                  start_time_str, created_at, notes, latitude, longitude))
             scan_id = cursor.lastrowid
             conn.commit()
 
@@ -91,7 +104,8 @@ class ScanDatabase:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, name, altitude, azimuth, duration_seconds,
-                       resolution, start_time, created_at, notes
+                       resolution, start_time, created_at, notes,
+                       latitude, longitude
                 FROM scans
                 ORDER BY start_time DESC
             """)
@@ -108,6 +122,8 @@ class ScanDatabase:
                 'start_time': datetime.fromisoformat(row['start_time']),
                 'created_at': datetime.fromisoformat(row['created_at']),
                 'notes': row['notes'] or "",
+                'latitude': row['latitude'],
+                'longitude': row['longitude'],
             }
             for row in rows
         ]
@@ -127,7 +143,8 @@ class ScanDatabase:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, name, altitude, azimuth, duration_seconds,
-                       resolution, start_time, created_at, notes
+                       resolution, start_time, created_at, notes,
+                       latitude, longitude
                 FROM scans
                 WHERE id = ?
             """, (scan_id,))
@@ -146,6 +163,8 @@ class ScanDatabase:
             'start_time': datetime.fromisoformat(row['start_time']),
             'created_at': datetime.fromisoformat(row['created_at']),
             'notes': row['notes'] or "",
+            'latitude': row['latitude'],
+            'longitude': row['longitude'],
         }
     
     def delete_scan(self, scan_id: int) -> bool:
@@ -178,7 +197,7 @@ class ScanDatabase:
             True if scan was updated, False if not found
         """
         allowed_fields = ['name', 'altitude', 'azimuth', 'duration_seconds',
-                         'resolution', 'start_time', 'notes']
+                         'resolution', 'start_time', 'notes', 'latitude', 'longitude']
         
         updates = []
         values = []
