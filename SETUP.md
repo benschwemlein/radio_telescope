@@ -4,8 +4,8 @@
 
 | Method | Details |
 |--------|---------|
-| IP address | `192.168.1.35` |
-| SSH | `ssh benschwem@192.168.1.35` |
+| IP address | `<YOUR_PI_IP>` (192.168.1.35) |
+| SSH | `ssh <PI_USER>@<YOUR_PI_IP>` |
 | VNC | Run `sudo raspi-config` → Interface Options → VNC → Enabled, then connect with RealVNC Viewer on Windows |
 
 ---
@@ -154,7 +154,7 @@ sudo apt install -y python3-matplotlib
 ### Copy your plot script from Windows (PowerShell)
 
 ```powershell
-scp plot_hydrogen.py benschwem@192.168.1.35:/home/benschwem/scripts/
+scp plot_hydrogen.py <PI_USER>@<YOUR_PI_IP>:/home/<PI_USER>/scripts/
 ```
 
 ### Run the plot (inside a VNC session — required for the window to display)
@@ -167,7 +167,7 @@ python3 ~/scripts/plot_hydrogen.py test.csv
 ### Download a data file from the Pi to Windows
 
 ```powershell
-scp benschwem@192.168.1.35:/home/benschwem/no_sun_scan_122425_1.csv ~/Downloads/
+scp <PI_USER>@<YOUR_PI_IP>:/home/<PI_USER>/no_sun_scan_122425_1.csv ~/Downloads/
 ```
 
 ---
@@ -216,17 +216,16 @@ Use **`rtl_power_fftw`** for hydrogen-line observations — it gives finer frequ
 
 ---
 
-## Observation Site — 700 White Tail Dr, Gahanna OH 43230
+## Observation Site
 
 | | |
 |---|---|
-| **Coordinates** | 40.040° N, -82.875° W |
 | **Galactic center max elevation** | ~21° (due south, summer) — likely blocked by trees/roofline |
 | **Cygnus arm elevation** | ~75° overhead — excellent target |
 | **Primary RFI concern** | John Glenn Airport (~2 mi) — DME/TACAN at 960–1215 MHz bleeds near 1420 MHz |
 | **Mitigation** | SAWbird+ H1 cavity filter handles this; prefer north/overhead pointings |
 
-The app is pre-configured with these coordinates.
+Configure your coordinates in the app's location field on first launch.
 
 ---
 

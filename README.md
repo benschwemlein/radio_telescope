@@ -2,6 +2,13 @@
 
 A PyQt6 application for visualizing and planning radio telescope observations with an RTL-SDR dongle on a Raspberry Pi, focused on hydrogen line (1420 MHz) observations.
 
+## Hardware
+
+| | |
+|---|---|
+| ![Setup photo 1](images/1000020644.jpg) | ![Setup photo 2](images/1000020640_1.jpg) |
+| ![Setup photo 3](images/1000020652.jpg) | |
+
 ## Features
 
 - **3D Globe View** — celestial sphere with Earth, Milky Way band, Sun, galactic center, horizon ring, and compass markers
