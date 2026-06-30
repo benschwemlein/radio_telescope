@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 _log = logging.getLogger(__name__)
 _CONFIG_FILE = Path.home() / ".radio_telescope" / "config.json"
-_DEFAULT_LAT =  40.040
+_DEFAULT_LAT =  40.040   # 700 White Tail Dr, Gahanna OH
 _DEFAULT_LON = -82.875
 import numpy as np
 from PyQt6 import QtWidgets, QtGui
@@ -97,7 +97,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(QtWidgets.QLabel("Address / Place"))
         addr_row = QtWidgets.QHBoxLayout()
         self.addr_edit = QtWidgets.QLineEdit()
-        self.addr_edit.setPlaceholderText("e.g. 123 Main St, City ST")
+        self.addr_edit.setPlaceholderText("e.g. 700 White Tail Dr, Gahanna OH")
         addr_row.addWidget(self.addr_edit)
         self.lookup_btn = QtWidgets.QPushButton("Look Up")
         self.lookup_btn.clicked.connect(self._on_lookup_address)

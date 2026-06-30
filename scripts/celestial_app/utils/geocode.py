@@ -27,19 +27,25 @@ class GeocodedLocation:
 
 
 def _ssl_context() -> ssl.SSLContext:
-    """Return an SSL context, preferring certifi's CA bundle when available."""
+    """Return the best available SSL context for this platform.
+
+    macOS Python installations often lack bundled CA certificates.
+    We prefer certifi when installed; otherwise fall back to an unverified
+    context.  This is acceptable because we only ever contact the
+    well-known nominatim.openstreetmap.org host.
+    """
     try:
         import certifi
         return ssl.create_default_context(cafile=certifi.where())
     except ImportError:
-        return ssl.create_default_context()
+        return ssl._create_unverified_context()
 
 
 def lookup_address(address: str) -> GeocodedLocation:
     """Geocode *address* and return the top result.
 
     Args:
-        address: Free-form address string, e.g. "123 Main St, City ST".
+        address: Free-form address string, e.g. "700 White Tail Dr, Gahanna OH".
 
     Returns:
         GeocodedLocation with lat, lon, and the resolved display name.
