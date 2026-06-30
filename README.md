@@ -44,6 +44,7 @@ The app is still a work in progress. Planned additions:
 - User-friendly interface for controlling the scanning software on the Raspberry Pi
 - Tools for managing and organizing collected scan data
 - Ability to mark obstructions (trees, house, roofline) on the 2D map so they can be accounted for when planning scans
+- Graph generation from collected scan data
 
 ![App screenshot 1](images/app_screenshot_1.png)
 ![App screenshot 2](images/app_screenshot_2.png)
